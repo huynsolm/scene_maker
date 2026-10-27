@@ -74,6 +74,26 @@ describe('자막 레이아웃', () => {
   });
 });
 
+describe('레이아웃 성능', () => {
+  // 렌더 작업은 동기 계산이라 오래 걸리면 서버 전체가 멈춘다. 최악의 입력(최대 길이 200자, 붙여쓰기)도 빨라야 한다.
+  it('200자 붙여쓰기·200자 일반 문장·3줄 문구가 각각 0.5초 안에 끝난다', () => {
+    for (const text of ['가'.repeat(200), '안내 문구입니다 '.repeat(25).trim().slice(0, 200), 'Stock 12개 — order now: 3 boxes of milk (2%) '.repeat(5).slice(0, 200)]) {
+      const t0 = performance.now();
+      const l = L(text);
+      const ms = performance.now() - t0;
+      expect(l.lines.length).toBeGreaterThan(1);
+      expect(ms, `${text.slice(0, 10)}… ${ms.toFixed(0)}ms`).toBeLessThan(500);
+    }
+  });
+
+  it('글자 폭 측정은 글꼴 규칙을 따른 값이다(알려진 기준값 고정)', () => {
+    // 이전 측정 방식(opentype 의 전체 shaping)으로 구한 값. 측정 방식을 바꿔도 같은 폭이어야 영상·미리보기와 어긋나지 않는다.
+    expect(measurer.width('매장에 우유가 부족한지 확인하기 어려우셨나요?', 40.96)).toBeCloseTo(811.29, 1);
+    expect(measurer.width('재고 화면에서 현재 수량과 부족한 품목을 확인하세요.', 40.96)).toBeCloseTo(897.3, 1);
+    expect(measurer.width('Stock 12개 남음 — order now: 3 boxes of milk (2%) 확인', 40.96)).toBeCloseTo(1051.2, 1);
+  });
+});
+
 describe('ASS 이스케이프', () => {
   it('중괄호와 백슬래시로 ASS 태그를 끼워 넣을 수 없다', () => {
     const out = escapeAssText('{\\an9\\p1}악성\\N 문구{x}');
