@@ -12,6 +12,7 @@ import {
   VIDEO,
 } from '../../shared/limits';
 import type { Project } from '../../shared/types';
+import { ApiFailure, api } from '../api';
 import { CenterMessage, SampleTag } from '../components';
 import { isBusy, mmss } from '../format';
 import { Link, navigate } from '../router';
@@ -26,6 +27,8 @@ export function Editor({ projectId }: { projectId: string }) {
   const [sel, setSel] = useState(0);
   const [guides, setGuides] = useState(true);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [starting, setStarting] = useState(false);
+  const startingRef = useRef(false); // state 는 같은 틱의 두 번째 클릭에는 아직 갱신되지 않아서 ref 로 동기 차단한다
   const fileRef = useRef<HTMLInputElement>(null);
   const titleRef = useRef<HTMLInputElement>(null);
   const textRef = useRef<HTMLTextAreaElement>(null);
@@ -84,6 +87,31 @@ export function Editor({ projectId }: { projectId: string }) {
   const goBack = () => {
     if (ed.save === 'failed' && !window.confirm('저장하지 못한 내용이 있어요. 그래도 나갈까요?')) return;
     navigate('/');
+  };
+
+  // 영상 생성 요청. 서버는 '저장된' 내용으로 만들기 때문에 먼저 대기 중인 변경을 모두 저장한다.
+  const startRender = async () => {
+    if (startingRef.current) return; // 연속 클릭 방지(서버도 진행 중이면 새 작업을 만들지 않는다)
+    startingRef.current = true;
+    setStarting(true);
+    try {
+      if (!(await ed.saveNow())) {
+        toast.show('저장하지 못해서 영상을 만들 수 없어요. 다시 저장한 뒤 시도해 주세요');
+        return;
+      }
+      try {
+        await api.createRender(projectId);
+      } catch (e) {
+        // 이미 진행 중이면 새로 만들지 않고 진행 화면으로 보낸다
+        if (!(e instanceof ApiFailure && e.code === 'RENDER_IN_PROGRESS')) throw e;
+      }
+      navigate(`/projects/${projectId}/result`);
+    } catch (e) {
+      toast.show(e instanceof Error ? e.message : '영상 만들기를 요청하지 못했어요');
+    } finally {
+      startingRef.current = false;
+      setStarting(false);
+    }
   };
 
   const pickFile = () => fileRef.current?.click();
@@ -387,6 +415,8 @@ export function Editor({ projectId }: { projectId: string }) {
             setConfirmOpen(false);
             setTimeout(() => titleRef.current?.focus(), 0);
           }}
+          onStart={() => void startRender()}
+          starting={starting}
         />
       )}
       {toast.node}

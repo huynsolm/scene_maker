@@ -38,6 +38,10 @@ export const SUBTITLE = {
   bottomMarginPct: 11,
   fontSizeWidthPct: 3.2,
   lineHeight: 1.45,
+  /** 박스 안쪽 여백과 모서리 반지름. 프레임 너비에 대한 % (미리보기 CSS 의 cqw 와 같은 값) */
+  padXWidthPct: 1.8,
+  padYWidthPct: 0.9,
+  radiusWidthPct: 0.6,
   background: 'rgba(18,19,24,.74)',
   color: '#FFFFFF',
 } as const;

@@ -4,11 +4,56 @@ import os from 'node:os';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { buildApp, type BuiltApp } from '../server/app';
+import type { RenderInput, RenderHooks, RenderResult, Renderer } from '../server/render/renderer';
 
-export async function makeApp(dataDir?: string): Promise<BuiltApp & { dataDir: string }> {
+export async function makeApp(
+  dataDir?: string,
+  deps: { renderer?: Renderer } = { renderer: new FakeRenderer() },
+): Promise<BuiltApp & { dataDir: string }> {
   const dir = dataDir ?? fs.mkdtempSync(path.join(os.tmpdir(), 'scene-maker-test-'));
-  const built = await buildApp({ dataDir: dir, webDist: null });
+  const built = await buildApp({ dataDir: dir, webDist: null }, deps);
   return { ...built, dataDir: dir };
+}
+
+/** 렌더러를 흉내 낸다. auto=false 면 release/fail 을 부를 때까지 '생성 중'으로 머문다. */
+export class FakeRenderer implements Renderer {
+  calls: RenderInput[] = [];
+  auto = true;
+  failWith: Error | null = null;
+  private waiters: Array<{ resolve: () => void; reject: (e: Error) => void }> = [];
+
+  async render(input: RenderInput, hooks: RenderHooks): Promise<RenderResult> {
+    this.calls.push(input);
+    hooks.onStep(2);
+    if (!this.auto) {
+      await new Promise<void>((resolve, reject) => {
+        this.waiters.push({ resolve, reject });
+        hooks.signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+      });
+    }
+    if (this.failWith) throw this.failWith;
+    fs.mkdirSync(input.workDir, { recursive: true });
+    const outputPath = path.join(input.workDir, 'output.mp4');
+    fs.writeFileSync(outputPath, Buffer.from('0123456789abcdefghij')); // 20바이트
+    hooks.onStep(3);
+    return { outputPath, durationSec: input.scenes.reduce((a, s) => a + s.durationSec, 0), width: 1280, height: 720, hasAudio: false };
+  }
+  release(i = 0) {
+    this.waiters[i]!.resolve();
+  }
+  fail(e: Error, i = 0) {
+    this.waiters[i]!.reject(e);
+  }
+}
+
+export async function waitFor<T>(fn: () => T | Promise<T>, what: string, ms = 5000): Promise<NonNullable<T>> {
+  const end = Date.now() + ms;
+  for (;;) {
+    const v = await fn();
+    if (v) return v as NonNullable<T>;
+    if (Date.now() > end) throw new Error(`시간 안에 충족되지 않음: ${what}`);
+    await new Promise((r) => setTimeout(r, 20));
+  }
 }
 
 export async function upload(

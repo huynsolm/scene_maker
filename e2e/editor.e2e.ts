@@ -81,6 +81,22 @@ describe('1단계 화면 흐름', () => {
     await page.close();
   });
 
+  it('새 영상 만들기를 같은 틱에 두 번 눌러도 프로젝트는 1개만 만들어진다', async () => {
+    const page = await env.newPage();
+    await page.goto(env.base + '/');
+    await eventually(visible(page, '.list-main'), '목록');
+    const before = ((await (await fetch(`${env.base}/api/projects`)).json()) as any).projects.length;
+    await page.getByRole('button', { name: '+ 새 영상 만들기' }).evaluate((el) => {
+      (el as HTMLButtonElement).click();
+      (el as HTMLButtonElement).click();
+    });
+    await page.waitForURL(/\/projects\//);
+    await page.getByLabel('영상 제목').waitFor();
+    const after = ((await (await fetch(`${env.base}/api/projects`)).json()) as any).projects.length;
+    expect(after - before).toBe(1);
+    await page.close();
+  });
+
   it('이미지 업로드: 올리면 미리보기에 나오고, 새로고침 후에도 남고, 삭제하면 비어 있는 상태로 돌아간다', async () => {
     const page = await env.newPage();
     await newProject(page);
@@ -270,7 +286,7 @@ describe('1단계 화면 흐름', () => {
     await page.locator('.topbar').getByRole('button', { name: '영상 만들기' }).click();
     await eventually(hasText(page, '[role=dialog]', '이 내용으로 영상을 만들까요?'), '점검 통과');
     expect((await text(page, '[role=dialog]')).match(/준비됐어요/g)?.length).toBe(3);
-    await eventually(hasText(page, '[data-testid=stage-note]', '다음 단계'), '임시 안내 표시');
+    expect(await page.locator('[role=dialog] .btn-primary').isEnabled()).toBe(true); // 누락 없으면 시작 가능
     await page.close();
   });
 

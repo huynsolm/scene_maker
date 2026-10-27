@@ -148,7 +148,7 @@ input[type='number'] { -moz-appearance: textfield; }
 .frame .empty-img { position: absolute; inset: 0; background: #26272d; display: flex; align-items: center; justify-content: center; padding-bottom: 10cqw; }
 .frame .empty-img button { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 16px 22px; border: 1.5px dashed var(--hint-border); border-radius: 10px; background: rgba(255, 255, 255, 0.06); text-align: center; font: inherit; }
 .subtitle-slot { position: absolute; display: flex; justify-content: center; }
-.subtitle { text-align: center; text-wrap: balance; font-weight: 600; letter-spacing: -0.01em; }
+.subtitle { text-align: center; text-wrap: balance; font-weight: 600; letter-spacing: -0.01em; word-break: keep-all; overflow-wrap: anywhere; }
 .subtitle-hint { border: 1.5px dashed var(--hint-border); color: var(--primary-text); background: #fff; font-size: 13px; font-weight: 500; padding: 8px 14px; border-radius: 8px; }
 .guide-box { position: absolute; top: 10%; bottom: 10%; left: 10%; right: 10%; border: 1.5px dashed var(--guide); border-radius: 2px; pointer-events: none; box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.35); }
 .controls { display: flex; align-items: center; gap: 12px; padding: 8px 0 0; flex-wrap: wrap; }

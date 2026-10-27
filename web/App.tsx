@@ -2,13 +2,13 @@ import { CenterMessage } from './components';
 import { Link, usePath } from './router';
 import { Editor } from './screens/Editor';
 import { ProjectList } from './screens/ProjectList';
-import { ResultPlaceholder } from './screens/ResultPlaceholder';
+import { ResultScreen } from './screens/ResultScreen';
 
 export function App() {
   const path = usePath();
   if (path === '/' || path === '') return <ProjectList />;
   const result = path.match(/^\/projects\/([0-9a-f-]{36})\/result\/?$/);
-  if (result) return <ResultPlaceholder projectId={result[1]!} />;
+  if (result) return <ResultScreen key={result[1]} projectId={result[1]!} />;
   const edit = path.match(/^\/projects\/([0-9a-f-]{36})\/?$/);
   if (edit) return <Editor key={edit[1]} projectId={edit[1]!} />;
   return (

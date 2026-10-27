@@ -29,8 +29,10 @@ export function useProjectEditor(id: string, onToast: (msg: string) => void) {
   const version = useRef(0); // 편집할 때마다 증가
   const savedVersion = useRef(0); // 서버에 반영이 확인된 마지막 버전
   const inFlight = useRef(false);
+  const inFlightDone = useRef<Promise<boolean>>(Promise.resolve(true));
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const alive = useRef(true);
+  const saveFailedRef = useRef(false);
 
   const load = useCallback(async () => {
     setLoadState('loading');
@@ -68,34 +70,63 @@ export function useProjectEditor(id: string, onToast: (msg: string) => void) {
     };
   }, [id, load]);
 
-  const flush = useCallback(async () => {
-    if (!draftRef.current || inFlight.current) return;
-    if (version.current === savedVersion.current) return;
-    inFlight.current = true;
+  /** draft 를 서버로 한 번 보낸다. 성공하면 true. */
+  const send = useCallback(async (): Promise<boolean> => {
+    const body = draftRef.current!;
     const sentVersion = version.current;
     setSave('saving');
-    let failed = false;
     try {
-      const p = await api.saveProject(id, draftRef.current);
-      if (!alive.current) return;
+      const p = await api.saveProject(id, body);
+      if (!alive.current) return false;
       savedVersion.current = Math.max(savedVersion.current, sentVersion);
+      saveFailedRef.current = false;
       setProject((prev) => (prev ? { ...prev, status: p.status, updatedAt: p.updatedAt } : prev));
       setSaveError(null);
       if (version.current === sentVersion) {
         setSave('saved');
         setSavedAt(hm(new Date()));
       }
+      return true;
     } catch (e) {
-      failed = true;
-      if (!alive.current) return;
-      setSaveError(e instanceof Error ? e.message : '저장하지 못했어요.');
-      setSave('failed');
-    } finally {
-      inFlight.current = false;
+      saveFailedRef.current = true;
+      if (alive.current) {
+        setSaveError(e instanceof Error ? e.message : '저장하지 못했어요.');
+        setSave('failed');
+      }
+      return false;
     }
-    // 보내는 동안 더 고쳐졌다면 최신 내용을 이어서 저장한다. 실패했다면 사용자가 다시 저장하거나 다음 입력 때 재시도한다.
-    if (!failed && alive.current && version.current !== savedVersion.current) void flush();
   }, [id]);
+
+  /**
+   * 서버 내용이 draft 와 같아질 때까지 저장한다. 한 번에 하나만 전송하고, 보내는 동안 더 고쳐졌다면
+   * 최신 내용을 이어서 보낸다. 이미 진행 중이면 그 작업이 끝나기를 기다린다. 실패하면 false(draft 는 그대로).
+   */
+  const flush = useCallback((): Promise<boolean> => {
+    if (inFlight.current) return inFlightDone.current;
+    if (!draftRef.current || version.current === savedVersion.current) return Promise.resolve(true);
+    inFlight.current = true;
+    inFlightDone.current = (async () => {
+      try {
+        while (alive.current && version.current !== savedVersion.current) {
+          if (!(await send())) return false;
+        }
+        return true;
+      } finally {
+        inFlight.current = false;
+      }
+    })();
+    return inFlightDone.current;
+  }, [send]);
+
+  /**
+   * 대기 중인 변경(디바운스 중이거나 전송 중)을 지금 모두 저장하고 끝날 때까지 기다린다.
+   * 영상 생성은 서버에 저장된 내용을 기준으로 만들기 때문에, 요청 직전에 반드시 호출한다.
+   */
+  const saveNow = useCallback(async (): Promise<boolean> => {
+    clearTimeout(timer.current);
+    const ok = await flush();
+    return ok && version.current === savedVersion.current;
+  }, [flush]);
 
   const edit = useCallback(
     (fn: (d: SaveBody) => SaveBody) => {
@@ -168,7 +199,7 @@ export function useProjectEditor(id: string, onToast: (msg: string) => void) {
 
   return {
     loadState, reload: load, project, draft, save, savedAt, saveError, uploading,
-    setTitle, setText, setDuration, retrySave, uploadImage, removeImage,
+    setTitle, setText, setDuration, retrySave, saveNow, uploadImage, removeImage,
     hasUnsaved: () => version.current !== savedVersion.current,
   };
 }

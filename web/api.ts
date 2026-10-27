@@ -1,10 +1,12 @@
-import type { Project, ProjectSummary } from '../shared/types';
+import type { Project, ProjectSummary, RenderJobView } from '../shared/types';
 
 export class ApiFailure extends Error {
   constructor(
     readonly code: string,
     message: string,
     readonly status: number,
+    /** 서버가 error 객체에 실어 보낸 추가 정보(예: 이미 진행 중인 작업, 비어 있는 항목) */
+    readonly details: Record<string, unknown> = {},
   ) {
     super(message);
   }
@@ -34,6 +36,7 @@ async function request<T>(method: string, url: string, body?: BodyInit | object)
       data?.error?.code ?? 'UNKNOWN',
       data?.error?.message ?? '문제가 생겼어요. 잠시 후 다시 시도해 주세요.',
       res.status,
+      data?.error ?? {},
     );
   }
   return data as T;
@@ -51,6 +54,9 @@ export const api = {
   saveProject: (id: string, body: SaveBody) =>
     request<{ project: Project }>('PUT', `/api/projects/${id}`, body).then((r) => r.project),
   deleteProject: (id: string) => request<void>('DELETE', `/api/projects/${id}`),
+  createRender: (id: string) => request<{ job: RenderJobView }>('POST', `/api/projects/${id}/renders`).then((r) => r.job),
+  latestRender: (id: string) =>
+    request<{ job: RenderJobView | null }>('GET', `/api/projects/${id}/renders/latest`).then((r) => r.job),
   uploadImage: (id: string, position: number, file: File) => {
     const form = new FormData();
     form.append('file', file);

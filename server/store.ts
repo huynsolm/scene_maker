@@ -288,6 +288,15 @@ export class Store {
     return this.getProject(projectId);
   }
 
+  /** 렌더에 쓸 이미지 파일의 실제 경로. 파일이 없으면 렌더가 '이미지를 읽을 수 없어요'로 실패하도록 경로만 돌려준다. */
+  imageFileForRender(imageId: string): string {
+    const row = this.db
+      .prepare(`SELECT project_id, stored_name FROM images WHERE id = ?`)
+      .get(imageId) as { project_id: string; stored_name: string } | undefined;
+    if (!row) throw notFound('이미지');
+    return this.imagePath(row.project_id, row.stored_name);
+  }
+
   getImageFile(imageId: string): { path: string; mime: string } {
     const row = this.db
       .prepare(`SELECT project_id, stored_name, mime FROM images WHERE id = ?`)
