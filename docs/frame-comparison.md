@@ -1,5 +1,5 @@
 <!-- 이 파일은 `npm run compare:frame` 의 출력에 측정 환경을 덧붙인 것이다. 값은 측정 당시의 것이며 환경이 다르면 달라질 수 있다. 자동 검사는 e2e/frame-match.e2e.ts 가 맡는다. -->
-> 측정 환경: Chromium 153.0.8010.12 (Playwright) · ffmpeg version 6.1.1-3ubuntu5 · 영상 글꼴 Noto Sans KR SemiBold(`fonts/`) · 미리보기 자막 글꼴 = 같은 글꼴의 웹용 부분집합 woff2(`web/public/fonts/`) · Pretendard 1.3.9(npm `pretendard` 패키지에서 받아 대조용으로만 주입, 저장소에는 없음).
+> 측정 환경: Chromium 153.0.8010.12 (Playwright, `--font-render-hinting=none`) · ffmpeg version 6.1.1-3ubuntu5 · 영상 글꼴 Noto Sans KR SemiBold(`fonts/`) · 미리보기 자막 글꼴 = 같은 글꼴의 웹용 부분집합 woff2(`web/public/fonts/`) · Pretendard 1.3.9(npm `pretendard` 패키지에서 받아 대조용으로만 주입, 저장소에는 없음).
 > 명령: `npm run build && npm run compare:frame -- --pretendard <PretendardVariable.ttf> --out docs/frame-comparison.md`
 > 3단계에서 미리보기 자막 글꼴을 Pretendard → Noto Sans KR 로 바꾼 뒤의 결과다. 조건 3(Pretendard)은 바꾸기 전 모습을 대조용으로 남긴 것이다.
 
@@ -13,6 +13,7 @@
 - **pretendard** — 상자 위치 최대 31/1px(x/y), 크기 최대 62/1px(w/h) · 글자 경계 위치 최대 30/2px, 크기 최대 59/2px· 자막 글꼴 로드·글자 포함 확인: true
 
 - 상자 = 배경과 달라진 픽셀의 경계(반투명 어두운 박스). 글자 = 상자 안의 흰 글자 픽셀 경계.
+- 측정 브라우저 인자: `--font-render-hinting=none`
 - 미리보기 캡처는 화면상 위치를 반올림해 자르므로 **측정 오차가 약 ±1px** 있다. 1~2px 이하의 차이는 의미 있는 차이로 보지 않는다.
 - 영상은 영상 파일의 중간 프레임(libx264 압축 후)을, 미리보기는 같은 크기로 키운 화면을 캡처해 같은 함수로 분석했다.
 
@@ -48,3 +49,17 @@
 | 사용자 줄바꿈 | 18 | 1 | -36 | -1 | 17 | -2 | -34 | -1 | 2/2 | 같음 |
 | 2줄 | 0 | 1 | 0 | -1 | 22 | -1 | -44 | -2 | 2/2 | 같음 |
 | 영문·숫자 혼합 | 0 | 0 | 0 | 0 | 17 | -1 | -34 | -2 | 2/2 | 같음 |
+
+
+## 브라우저 글자 힌팅에 따른 차이 (환경 의존)
+
+같은 코드·같은 글꼴인데도 브라우저의 글자 힌팅 설정에 따라 글자 폭이 달라진다. 힌팅이 켜진 리눅스 브라우저(GitHub Actions 러너에서 관찰)는 글자 하나하나의 폭을 정수 픽셀로 반올림해, 25자 안팎의 한 줄 문구에서 상자 폭이 최대 6px 달랐다. 배포 CSS 미리보기(`served`)를 같은 샘플로 힌팅 설정만 바꿔 잰 결과(미리보기 − 영상, 6개 사례 중 최대 절대값):
+
+| `--font-render-hinting` | 상자 위치 x/y | 상자 크기 w/h | 글자 경계 위치 x/y | 글자 경계 크기 w/h |
+|---|---:|---:|---:|---:|
+| `none` (자막 일치 자동 검사가 쓰는 설정) | 2/1 | 4/1 | 3/0 | 6/3 |
+| `slight` | 2/1 | 4/1 | 2/0 | 5/3 |
+| `full` (CI 러너에서 관찰된 상황을 재현) | 3/1 | 6/1 | 3/0 | 7/3 |
+
+해석: 힌팅이 켜져도 차이는 **최대 약 7px(전체 폭의 0.5% 안팎)** 이고 줄바꿈 위치는 6개 사례 모두 같았다. 사용자의 OS·브라우저 설정에 따라 이 정도의 미세한 차이는 날 수 있고, 영상 쪽은 힌팅의 영향을 받지 않는다(서버가 글꼴 폭을 직접 재서 배치).
+`e2e/frame-match.e2e.ts` 는 코드·CSS·글꼴 규칙의 회귀(예: 부분집합 글꼴이 레이아웃 기능을 잃어 상자가 13px 좁아졌던 경우)를 잡기 위한 검사라서, 측정 브라우저의 힌팅을 `none` 으로 고정해 환경과 무관하게 같은 결과가 나오게 했다. 다른 설정으로 재 보려면 `COMPARE_CHROMIUM_ARGS="--font-render-hinting=full" npm run compare:frame`.

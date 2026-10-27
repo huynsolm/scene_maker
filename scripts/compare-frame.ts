@@ -106,7 +106,11 @@ export async function compareFrames(opts: { pretendard?: string; only?: string[]
   );
 
   // 3) 미리보기 캡처·분석(글꼴 조건별)
-  const browser = await chromium.launch();
+  // 글자 폭 측정을 환경과 무관하게 같게 하려고 힌팅을 끈다(--font-render-hinting=none).
+  // 힌팅이 켜진 리눅스 브라우저는 글자 폭을 정수 픽셀로 반올림해 상자 폭이 최대 6~7px(약 0.5%) 달라진다(docs/frame-comparison.md).
+  // 다른 설정으로 재 보려면 COMPARE_CHROMIUM_ARGS="--font-render-hinting=full" 처럼 덮어쓴다.
+  const browserArgs = process.env.COMPARE_CHROMIUM_ARGS?.split(' ').filter(Boolean) ?? ['--font-render-hinting=none'];
+  const browser = await chromium.launch({ args: browserArgs });
   const report: string[] = [];
   const summary: string[] = [];
   const structured: CompareResult['variants'] = [];
@@ -186,6 +190,7 @@ export async function compareFrames(opts: { pretendard?: string; only?: string[]
     ...summary,
     '',
     '- 상자 = 배경과 달라진 픽셀의 경계(반투명 어두운 박스). 글자 = 상자 안의 흰 글자 픽셀 경계.',
+    `- 측정 브라우저 인자: \`${browserArgs.join(' ') || '(없음)'}\``,
     '- 미리보기 캡처는 화면상 위치를 반올림해 자르므로 **측정 오차가 약 ±1px** 있다. 1~2px 이하의 차이는 의미 있는 차이로 보지 않는다.',
     '- 영상은 영상 파일의 중간 프레임(libx264 압축 후)을, 미리보기는 같은 크기로 키운 화면을 캡처해 같은 함수로 분석했다.',
     ...report,
