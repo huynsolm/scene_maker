@@ -131,6 +131,13 @@ export class Store {
           }
         : null,
     }));
+    const last = this.db
+      .prepare(
+        `SELECT id, finished_at FROM render_jobs
+          WHERE project_id = ? AND status = 'done' AND video_file IS NOT NULL
+          ORDER BY finished_at DESC, rowid DESC LIMIT 1`,
+      )
+      .get(id) as { id: string; finished_at: string } | undefined;
     return {
       id: p.id,
       title: p.title,
@@ -139,6 +146,7 @@ export class Store {
       updatedAt: p.updated_at,
       scenes,
       isSample: p.is_sample === 1,
+      lastVideo: last ? { jobId: last.id, finishedAt: last.finished_at } : null,
     };
   }
 

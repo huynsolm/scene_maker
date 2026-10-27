@@ -26,7 +26,13 @@ export const IMAGE_ACCEPT = Object.values(IMAGE_TYPES).join(',');
 export const IMAGE_LABEL = 'JPG · PNG · WebP';
 
 /** 출력 영상 규격(2단계 렌더링에서 사용). 세로형은 범위 밖. */
-export const VIDEO = { width: 1280, height: 720, fps: 30 } as const;
+export const VIDEO = {
+  width: 1280,
+  height: 720,
+  fps: 30,
+  /** 프레임 배경색(투명 이미지 뒤에 깔린다). 미리보기 CSS 의 --frame 과 같은 값 */
+  background: '1B1C20',
+} as const;
 
 /**
  * 자막 배치. 화면 미리보기와 렌더러가 같은 값을 읽는다.

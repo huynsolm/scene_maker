@@ -15,6 +15,8 @@ export class RenderError extends Error {
     readonly title: string,
     readonly body: string,
     readonly detail?: string,
+    /** 문제가 된 장면 번호(1부터). 화면이 해당 장면 편집으로 바로 안내하는 데 쓴다. */
+    readonly sceneNo?: number,
   ) {
     super(title);
   }
@@ -26,6 +28,7 @@ export const imageDecodeFailed = (sceneNo: number, detail?: string) =>
     `장면 ${sceneNo} 이미지를 읽을 수 없어요`,
     `파일이 손상됐거나 지원하지 않는 형식일 수 있어요. 장면 ${sceneNo} 이미지를 JPG나 PNG로 다시 올린 뒤 시도해 주세요.`,
     detail,
+    sceneNo,
   );
 
 export const serverRestarted = () =>

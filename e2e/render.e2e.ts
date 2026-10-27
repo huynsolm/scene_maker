@@ -59,12 +59,12 @@ describe('2단계 생성 흐름(실제 ffmpeg)', () => {
     // 진행 중에는 요청 버튼이 막혀 있고 남은 시간(퍼센트)을 지어내지 않는다
     const status = await page.locator('[data-screen=result]').getAttribute('data-status');
     if (status !== 'done') {
-      await eventually(hasText(page, 'main', '영상 만들기 요청됨'), '요청됨 버튼');
-      expect(await page.locator('main').innerText()).not.toMatch(/\d+\s*%/);
+      await eventually(hasText(page, '.panel', '영상 만들기 요청됨'), '요청됨 버튼');
+      expect(await page.locator('.panel').innerText()).not.toMatch(/\d+\s*%/);
     }
 
     await eventually(async () => (await page.locator('[data-screen=result]').getAttribute('data-status')) === 'done', '완료', 90_000);
-    await eventually(hasText(page, 'main', '영상이 완성됐어요'), '완성 문구');
+    await eventually(hasText(page, '.panel', '영상이 완성됐어요'), '완성 문구');
     const href = (await page.getByRole('link', { name: 'MP4 다운로드' }).getAttribute('href'))!;
     expect(href).toMatch(/\/video\?download=1$/);
 
@@ -100,7 +100,7 @@ describe('2단계 생성 흐름(실제 ffmpeg)', () => {
 
     // 새로고침해도 결과가 유지된다
     await page.reload();
-    await eventually(hasText(page, 'main', '영상이 완성됐어요'), '새로고침 후에도 완료');
+    await eventually(hasText(page, '.panel', '영상이 완성됐어요'), '새로고침 후에도 완료');
     // 완료 뒤 고치면 목록에서는 편집 중으로 돌아간다
     await page.goto(`${env.base}/projects/${sample.id}`);
     await page.locator('#scene-text').fill('완료 뒤에 고친 문구');
@@ -126,7 +126,7 @@ describe('2단계 생성 흐름(실제 ffmpeg)', () => {
     await eventually(async () => (await page.locator('[data-screen=result]').getAttribute('data-status')) === 'failed', '실패 상태', 60_000);
     await eventually(hasText(page, '[role=alert]', '장면 2 이미지를 읽을 수 없어요'), '실패 이유');
     await eventually(hasText(page, '[role=alert]', 'IMAGE_DECODE_FAILED'), '오류 코드');
-    expect(await page.locator('main').innerText()).toContain('입력한 내용은 그대로 저장되어 있어요');
+    expect(await page.locator('.panel').innerText()).toContain('입력한 내용은 그대로 저장되어 있어요');
 
     // 그대로 다시 시도하면 같은 이유로 또 실패한다(새 작업이 만들어지고 중복되지 않는다)
     const before = await jobs(sample.id);
@@ -135,10 +135,11 @@ describe('2단계 생성 흐름(실제 ffmpeg)', () => {
     await eventually(async () => (await page.locator('[data-screen=result]').getAttribute('data-status')) === 'failed', '다시 실패', 60_000);
 
     // 편집 화면: 입력과 이미지가 보존되어 있다 → 이미지를 올바른 파일로 바꾼다
-    await page.getByRole('link', { name: '편집 화면으로 돌아가기' }).click();
+    await page.locator('.panel').getByRole('link', { name: /편집에서 확인하기/ }).click(); // 문제가 된 장면 편집으로 바로 이동
     await page.getByLabel('영상 제목').waitFor();
     expect(await page.getByLabel('영상 제목').inputValue()).toBe('매장 재고 관리 사용법');
-    await page.locator('[data-testid=scene-card-1]').click();
+    // 링크(?scene=2)로 들어왔으므로 이미 장면 2가 선택되어 있다
+    await eventually(hasText(page, '.col-inspector h2', '장면 2 편집'), '장면 2 자동 선택');
     expect(await page.locator('#scene-text').inputValue()).toContain('재고 화면에서');
     await page.getByTestId('file-input').setInputFiles({ name: 'fixed.png', mimeType: 'image/png', buffer: solidPng(1280, 720, [64, 120, 104]) });
     await eventually(hasText(page, '.image-row', 'fixed.png'), '이미지 교체');

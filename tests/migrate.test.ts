@@ -23,6 +23,7 @@ describe('DB 마이그레이션', () => {
     const cols = (db.prepare(`PRAGMA table_info(render_jobs)`).all() as Array<{ name: string }>).map((c) => c.name);
     expect(cols).toContain('step');
     expect(cols).toContain('error_detail');
+    expect(cols).toContain('error_scene');
     expect((db.prepare(`SELECT title FROM projects WHERE id = 'p1'`).get() as { title: string }).title).toBe('기존 프로젝트');
     expect((db.prepare(`SELECT step FROM render_jobs WHERE id = 'j1'`).get() as { step: number }).step).toBe(1);
     db.close();

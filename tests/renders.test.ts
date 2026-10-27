@@ -172,6 +172,46 @@ describe('생성 중 편집과 영상 버전', () => {
   });
 });
 
+describe('마지막 완성 영상', () => {
+  it('완성 전에는 없고, 완성되면 프로젝트에 붙으며, 고쳐서 편집 중이 되어도 유지된다', async () => {
+    const a = await setup();
+    expect((await proj(a.app, a.project.id)).lastVideo).toBeNull();
+    const j = (await post(a.app, a.project.id)).json().job;
+    const done = await waitFor(async () => {
+      const v = await job(a.app, j.id);
+      return v.status === 'done' ? v : null;
+    }, '완료');
+    expect(done.outdated).toBe(false);
+    let p = await proj(a.app, a.project.id);
+    expect(p.lastVideo.jobId).toBe(j.id);
+
+    await a.app.inject({ method: 'PUT', url: `/api/projects/${a.project.id}`, payload: validSave({ title: '고친 뒤' }) });
+    p = await proj(a.app, a.project.id);
+    expect(p.status).toBe('editing');
+    expect(p.lastVideo.jobId).toBe(j.id); // 이전 영상은 그대로 볼 수 있다
+    expect((await job(a.app, j.id)).outdated).toBe(true); // 다만 현재 내용보다 이전 버전이다
+    expect((await a.app.inject({ url: `/api/renders/${j.id}/video` })).statusCode).toBe(200);
+  });
+
+  it('새로 만든 영상이 실패해도 직전 완성 영상은 가리킨 채로 남고, 새 영상이 완성되면 그쪽으로 바뀐다', async () => {
+    const a = await setup();
+    const first = (await post(a.app, a.project.id)).json().job;
+    await waitFor(async () => (await job(a.app, first.id)).status === 'done', '첫 완료');
+
+    a.renderer.failWith = imageDecodeFailed(1);
+    const bad = (await post(a.app, a.project.id)).json().job;
+    await waitFor(async () => (await job(a.app, bad.id)).status === 'failed', '실패');
+    expect((await proj(a.app, a.project.id)).lastVideo.jobId).toBe(first.id);
+    expect((await a.app.inject({ url: `/api/projects/${a.project.id}/renders/latest` })).json().job.id).toBe(bad.id);
+
+    a.renderer.failWith = null;
+    const second = (await post(a.app, a.project.id)).json().job;
+    await waitFor(async () => (await job(a.app, second.id)).status === 'done', '둘째 완료');
+    expect((await proj(a.app, a.project.id)).lastVideo.jobId).toBe(second.id);
+    expect((await job(a.app, first.id)).outdated).toBe(false); // 고친 적이 없으므로 이전 영상도 '이전 버전'은 아니다
+  });
+});
+
 describe('실패와 재시도', () => {
   it('실패하면 이유를 남기고 입력·이미지는 그대로이며, 재시도는 새 작업으로 성공한다', async () => {
     const a = await setup();
@@ -181,7 +221,7 @@ describe('실패와 재시도', () => {
       const j = await job(a.app, first.id);
       return j.status === 'failed' ? j : null;
     }, '실패');
-    expect(failed.error).toMatchObject({ code: 'IMAGE_DECODE_FAILED', title: '장면 2 이미지를 읽을 수 없어요' });
+    expect(failed.error).toMatchObject({ code: 'IMAGE_DECODE_FAILED', title: '장면 2 이미지를 읽을 수 없어요', scene: 2 });
     expect(failed.error.body).toContain('다시 올린 뒤');
     expect(JSON.stringify(failed)).not.toContain('Invalid data found'); // 개발자용 상세는 응답에 싣지 않는다
     expect(db(a).prepare(`SELECT error_detail d FROM render_jobs WHERE id = ?`).get(first.id).d).toContain('Invalid data found');

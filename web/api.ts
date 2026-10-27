@@ -55,6 +55,7 @@ export const api = {
     request<{ project: Project }>('PUT', `/api/projects/${id}`, body).then((r) => r.project),
   deleteProject: (id: string) => request<void>('DELETE', `/api/projects/${id}`),
   createRender: (id: string) => request<{ job: RenderJobView }>('POST', `/api/projects/${id}/renders`).then((r) => r.job),
+  getRender: (jobId: string) => request<{ job: RenderJobView }>('GET', `/api/renders/${jobId}`).then((r) => r.job),
   latestRender: (id: string) =>
     request<{ job: RenderJobView | null }>('GET', `/api/projects/${id}/renders/latest`).then((r) => r.job),
   uploadImage: (id: string, position: number, file: File) => {

@@ -29,6 +29,7 @@ export interface JobRow {
   error_title: string | null;
   error_body: string | null;
   error_detail: string | null;
+  error_scene: number | null;
   step: number;
   video_file: string | null;
   created_at: string;
@@ -129,6 +130,9 @@ export class RenderStore {
   toView(j: JobRow): RenderJobView {
     const snap = JSON.parse(j.snapshot_json) as Snapshot;
     const done = j.status === 'done' && !!j.video_file;
+    const edited = this.db
+      .prepare(`SELECT updated_at > ? AS edited FROM projects WHERE id = ?`)
+      .get(j.created_at, j.project_id) as { edited: number } | undefined;
     return {
       id: j.id,
       projectId: j.project_id,
@@ -137,9 +141,16 @@ export class RenderStore {
       createdAt: j.created_at,
       startedAt: j.started_at,
       finishedAt: j.finished_at,
+      outdated: edited?.edited === 1,
       error:
         j.status === 'failed'
-          ? { code: j.error_code ?? 'INTERNAL', title: j.error_title ?? '', body: j.error_body ?? '', at: j.finished_at ?? j.created_at }
+          ? {
+              code: j.error_code ?? 'INTERNAL',
+              title: j.error_title ?? '',
+              body: j.error_body ?? '',
+              scene: j.error_scene,
+              at: j.finished_at ?? j.created_at,
+            }
           : null,
       videoUrl: done ? `/api/renders/${j.id}/video` : null,
       downloadUrl: done ? `/api/renders/${j.id}/video?download=1` : null,
@@ -202,14 +213,14 @@ export class RenderStore {
   }
 
   fail(jobId: string, e: RenderError) {
-    this.finish(jobId, 'failed', { error_code: e.code, error_title: e.title, error_body: e.body, error_detail: (e.detail ?? '').slice(0, 4000) || null });
+    this.finish(jobId, 'failed', { error_code: e.code, error_title: e.title, error_body: e.body, error_scene: e.sceneNo ?? null, error_detail: (e.detail ?? '').slice(0, 4000) || null });
   }
 
   /**
    * 작업을 끝낸다. 요청 이후에 프로젝트 내용이 바뀌었다면(생성 중 편집) 프로젝트는 '편집 중'으로 두고,
    * 그렇지 않으면 작업 결과(완료/실패)를 프로젝트 상태로 올린다. 작업 기록 자체는 어느 경우에도 남는다.
    */
-  private finish(jobId: string, status: 'done' | 'failed', cols: Record<string, string | null>) {
+  private finish(jobId: string, status: 'done' | 'failed', cols: Record<string, string | number | null>) {
     this.db.transaction(() => {
       const job = this.requireJob(jobId);
       const set = Object.keys(cols).map((c) => `${c} = @${c}`);

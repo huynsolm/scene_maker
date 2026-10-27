@@ -23,6 +23,19 @@ const arg = (name: string) => {
   return i >= 0 ? process.argv[i + 1] : undefined;
 };
 
+export interface CompareRow {
+  label: string;
+  /** 미리보기 − 영상 (px) */
+  box: { dx: number; dy: number; dw: number; dh: number };
+  ink: { dx: number; dy: number; dw: number; dh: number };
+  lines: { video: number; preview: number };
+  sameBreaks: boolean;
+}
+export interface CompareResult {
+  markdown: string;
+  variants: Array<{ id: string; rows: CompareRow[]; fontCovered: boolean }>;
+}
+
 const CASES: Array<{ label: string; text: string; color: [number, number, number] }> = [
   { label: '짧은 1줄', text: '매장에 우유가 부족한지 확인하기 어려우셨나요?', color: [74, 93, 140] },
   { label: '중간 1줄', text: '재고 화면에서 현재 수량과 부족한 품목을 확인하세요.', color: [64, 120, 104] },
@@ -39,15 +52,17 @@ interface Variant {
   font?: { file: string; weight: string };
 }
 
-async function main() {
+export async function compareFrames(opts: { pretendard?: string; only?: string[] } = {}): Promise<CompareResult> {
   const fontsDir = path.resolve('fonts');
   const noto = path.join(fontsDir, 'NotoSansKR-SemiBold.ttf');
-  const pretendard = arg('pretendard');
-  const variants: Variant[] = [
-    { id: 'served', title: '배포 CSS 그대로 (CDN 글꼴을 못 받는 환경에서는 시스템 대체 글꼴)' },
-    { id: 'noto', title: '미리보기 글꼴을 영상과 같은 Noto Sans KR 로 강제 (배치·렌더링 차이만 분리)', font: { file: noto, weight: '100 900' } },
-    ...(pretendard ? [{ id: 'pretendard', title: '미리보기에 Pretendard 주입 (CDN 이 열릴 때 사용자가 실제로 보는 모습)', font: { file: path.resolve(pretendard), weight: '45 920' } }] : []),
+  const pretendard = opts.pretendard;
+  const allVariants: Variant[] = [
+    { id: 'served', title: '배포 CSS 그대로 (자막은 웹용 Noto Sans KR 부분집합 woff2)' },
+    { id: 'full-noto', title: '자막 글꼴을 전체 Noto Sans KR TTF 로 교체 (부분집합이 전체 글꼴과 같은 결과인지 확인)', font: { file: noto, weight: '600' } },
+    ...(pretendard ? [{ id: 'pretendard', title: '자막 글꼴을 Pretendard 로 교체 (3단계 이전에 사용자가 보던 모습, 대조용)', font: { file: path.resolve(pretendard), weight: '45 920' } }] : []),
   ];
+
+  const variants = opts.only ? allVariants.filter((v) => opts.only!.includes(v.id)) : allVariants;
 
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'scene-maker-compare-'));
   const { app, store, renders } = await buildApp({ dataDir, webDist: path.resolve('dist/web') });
@@ -94,6 +109,7 @@ async function main() {
   const browser = await chromium.launch();
   const report: string[] = [];
   const summary: string[] = [];
+  const structured: CompareResult['variants'] = [];
   const shotDir = path.join(dataDir, 'shots');
   fs.mkdirSync(shotDir);
   const flat = projects.flatMap((p) => p.cases.map((c, i) => ({ pid: p.id, i, c })));
@@ -104,6 +120,7 @@ async function main() {
       await page.route('**/__font/subtitle.ttf', (r) => r.fulfill({ path: v.font!.file, contentType: 'font/ttf' }));
     }
     const deltas: Array<Record<string, number>> = [];
+    const rowsOut: CompareRow[] = [];
     report.push(`\n### 미리보기 조건: ${v.title}\n`);
     report.push('| 사례 | 상자 Δx | Δy | Δw | Δh | 글자 Δx | Δy | Δw | Δh | 줄 수 (영상/미리보기) | 줄바꿈 위치 |');
     report.push('|---|---:|---:|---:|---:|---:|---:|---:|---:|:---:|:---:|');
@@ -114,12 +131,15 @@ async function main() {
       await page.addStyleTag({
         content:
           `.preview-wrap{max-width:${VIDEO.width}px!important}` +
-          (v.font ? `@font-face{font-family:'Pretendard Variable';src:url('/__font/subtitle.ttf');font-weight:${v.font.weight}}` : ''),
+          (v.font ? `@font-face{font-family:'Subtitle KR';src:url('/__font/subtitle.ttf');font-weight:${v.font.weight}}` : ''),
       });
       await page.locator(`[data-testid=scene-card-${i}]`).click();
       await page.getByRole('button', { name: /안내선 숨기기/ }).click(); // 편집용 안내선은 영상에 없으므로 끈다
       await page.evaluate(() => document.fonts.ready);
-      if (v.font && !loaded) loaded = String(await page.evaluate(() => document.fonts.check("600 40px 'Pretendard Variable'")));
+      // 자막 글꼴이 실제로 받아졌고 이 사례의 모든 글자를 담고 있는지(check 는 대체 글꼴이 필요하면 false)
+      const covered = await page.evaluate((t) => document.fonts.load("600 40px 'Subtitle KR'", t).then(() => document.fonts.check("600 40px 'Subtitle KR'", t)), c.text);
+      if (!covered) loaded = `false(사례 ${n + 1}: 글꼴이 글자를 모두 담지 못함)`;
+      else if (!loaded) loaded = 'true';
       await page.getByTestId('preview-subtitle').waitFor();
       const frame = page.getByTestId('preview-frame');
       const bb = (await frame.boundingBox())!;
@@ -137,13 +157,21 @@ async function main() {
       };
       deltas.push(row);
       const sameBreaks = JSON.stringify(previewLines) === JSON.stringify(rows[n]!.layoutLines);
+      rowsOut.push({
+        label: c.label,
+        box: { dx: row.bx, dy: row.by, dw: row.bw, dh: row.bh },
+        ink: { dx: row.ix, dy: row.iy, dw: row.iw, dh: row.ih },
+        lines: { video: vd.lines, preview: pv.lines },
+        sameBreaks,
+      });
       report.push(
         `| ${c.label} | ${row.bx} | ${row.by} | ${row.bw} | ${row.bh} | ${row.ix} | ${row.iy} | ${row.iw} | ${row.ih} | ${vd.lines}/${pv.lines} | ${sameBreaks ? '같음' : '**다름**'} |`,
       );
       if (!sameBreaks) report.push(`|  | 영상: ${rows[n]!.layoutLines.map((l) => `「${l.replace(/\n/g, '⏎')}」`).join(' ')}<br>미리보기: ${previewLines.map((l) => `「${l}」`).join(' ')} |||||||||| |`);
     }
     const max = (k: string) => Math.max(...deltas.map((r) => Math.abs(r[k]!)));
-    summary.push(`- **${v.id}** — 상자 위치 최대 ${max('bx')}/${max('by')}px(x/y), 크기 최대 ${max('bw')}/${max('bh')}px(w/h) · 글자 경계 위치 최대 ${max('ix')}/${max('iy')}px, 크기 최대 ${max('iw')}/${max('ih')}px${v.font ? ` · 글꼴 로드 확인: ${loaded}` : ''}`);
+    summary.push(`- **${v.id}** — 상자 위치 최대 ${max('bx')}/${max('by')}px(x/y), 크기 최대 ${max('bw')}/${max('bh')}px(w/h) · 글자 경계 위치 최대 ${max('ix')}/${max('iy')}px, 크기 최대 ${max('iw')}/${max('ih')}px· 자막 글꼴 로드·글자 포함 확인: ${loaded}`);
+    structured.push({ id: v.id, rows: rowsOut, fontCovered: loaded === 'true' });
     await page.close();
   }
   await browser.close();
@@ -162,10 +190,7 @@ async function main() {
     '- 영상은 영상 파일의 중간 프레임(libx264 압축 후)을, 미리보기는 같은 크기로 키운 화면을 캡처해 같은 함수로 분석했다.',
     ...report,
   ].join('\n');
-  const outFile = arg('out');
-  if (outFile) fs.writeFileSync(outFile, out + '\n');
-  console.log(out);
-  console.log(`\n(캡처 파일: ${shotDir})`);
+  return { markdown: out, variants: structured };
 }
 
 /** 미리보기 자막을 글자 단위 Range 로 훑어 줄별 문자열로 만든다(브라우저가 실제로 나눈 줄) */
@@ -192,7 +217,16 @@ async function lineTexts(page: Page): Promise<string[]> {
   });
 }
 
-main().catch((e) => {
-  console.error(e);
-  process.exit(1);
-});
+// `npm run compare:frame` 으로 직접 실행했을 때만 동작한다(테스트에서는 compareFrames 를 import 해서 쓴다).
+if (import.meta.url === `file://${process.argv[1]}`) {
+  compareFrames({ pretendard: arg('pretendard') })
+    .then(({ markdown }) => {
+      const outFile = arg('out');
+      if (outFile) fs.writeFileSync(outFile, markdown + '\n');
+      console.log(markdown);
+    })
+    .catch((e) => {
+      console.error(e);
+      process.exit(1);
+    });
+}

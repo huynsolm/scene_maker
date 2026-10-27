@@ -80,9 +80,16 @@ export class FfmpegRenderer implements Renderer {
     const { width, height, fps } = VIDEO;
     const fonts = escapeFilterValue(fontsDir);
     const inputs = scenes.flatMap((s, i) => ['-loop', '1', '-framerate', String(fps), '-t', String(s.durationSec), '-i', scenes[i]!.imagePath]);
+    // 이미지는 프레임 배경색 위에 올린다. 투명 PNG 의 투명 영역(과 그 아래 숨은 색)이 그대로 비치지 않고,
+    // 미리보기(어두운 프레임 배경 위에 이미지)와 같게 보이도록 하기 위해서다. 불투명 이미지는 결과가 같다.
     const chains = scenes.map(
-      (_, i) =>
-        `[${i}:v]scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},setsar=1,format=yuv420p,fps=${fps},` +
+      (s, i) =>
+        `color=c=0x${VIDEO.background}:s=${width}x${height}:r=${fps}:d=${s.durationSec}[bg${i}];` +
+        `[${i}:v]format=rgba,scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},setsar=1[fg${i}];` +
+        // overlay 는 장면마다 마지막 프레임을 하나 잃는다(30초 영상이 29.9초가 됨). 프레임을 몇 개 복제해 붙인 뒤
+        // 정확한 프레임 수(길이×fps)로 자르면 어떤 길이에서도 결과가 같다.
+        `[bg${i}][fg${i}]overlay=shortest=1:format=auto,format=yuv420p,fps=${fps},` +
+        `tpad=stop_mode=clone:stop=5,trim=end_frame=${s.durationSec * fps},setpts=PTS-STARTPTS,` +
         `subtitles=s${i}.ass:fontsdir=${fonts}[v${i}]`,
     );
     const concat = `${scenes.map((_, i) => `[v${i}]`).join('')}concat=n=${scenes.length}:v=1:a=0[v]`;

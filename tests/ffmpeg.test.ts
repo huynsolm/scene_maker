@@ -153,6 +153,40 @@ d('실제 ffmpeg 렌더링', () => {
     }
   }, 120_000);
 
+  it('EXIF 회전 JPEG 는 사진 앱에서 보이는 방향으로, 투명 PNG 는 프레임 배경색 위에 합성되어 나온다(미리보기와 같은 모양)', async () => {
+    const a = await makeApp(undefined, {});
+    apps.push(a.app);
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sm-orient-'));
+    // 반투명 흰색(알파 50%) PNG: 알파를 무시하면 순백, 배경 위에 합성하면 회색
+    const half = path.join(dir, 'half.png');
+    execFileSync('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=white@0.5:s=640x360,format=rgba', '-frames:v', '1', half]);
+    // 600x300 픽셀(왼쪽 빨강·오른쪽 파랑)에 EXIF orientation=6(시계 방향 90°)이 들어 있다 → 화면에는 세로(위 빨강·아래 파랑)
+    const rot = fs.readFileSync(path.resolve('tests/fixtures/exif-rotate6.jpg'));
+
+    const p = a.store.createProject({ title: '방향과 투명도' });
+    a.store.saveProject(p.id, { title: '방향과 투명도', scenes: [{ text: '회전', durationSec: 3 }, { text: '투명', durationSec: 3 }, { text: '회전2', durationSec: 3 }] });
+    expect((await upload(a.app, p.id, 0, rot, 'rot.jpg', 'image/jpeg')).statusCode).toBe(200);
+    expect((await upload(a.app, p.id, 1, fs.readFileSync(half), 'half.png', 'image/png')).statusCode).toBe(200);
+    expect((await upload(a.app, p.id, 2, rot, 'rot2.jpg', 'image/jpeg')).statusCode).toBe(200);
+    const j = (await a.app.inject({ method: 'POST', url: `/api/projects/${p.id}/renders` })).json().job;
+    await waitFor(async () => {
+      const v = (await a.app.inject({ url: `/api/renders/${j.id}` })).json().job;
+      if (v.status === 'failed') throw new Error(JSON.stringify(v.error));
+      return v.status === 'done';
+    }, '렌더 완료', 90_000);
+    const file = a.renders.videoPathFor(p.id, j.id);
+
+    const f1 = frame(file, 1.5);
+    expect(near(px(f1, 100, 100), [220, 30, 30], 12), '회전 JPEG 위쪽은 빨강').toBe(true);
+    expect(near(px(f1, 100, 620), [30, 30, 220], 12), '회전 JPEG 아래쪽은 파랑(자막 상자 밖 지점)').toBe(true);
+
+    const f2 = frame(file, 4.5);
+    const bg = [27, 28, 32];
+    const expectGray = bg.map((c) => (255 + c) / 2); // 흰색 50% + 배경 50%
+    expect(near(px(f2, 4, 4), expectGray, 8), '반투명 흰색은 배경과 섞인 회색').toBe(true);
+    expect(near(px(f2, 4, 4), [255, 255, 255], 20), '알파를 무시한 순백이면 안 된다').toBe(false);
+  }, 120_000);
+
   it('긴 한국어 3줄 문구도 상자가 안전 영역 안에 있고 글자가 잘리지 않는다', async () => {
     const a = await makeApp(undefined, {});
     apps.push(a.app);

@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS render_jobs (
   error_code     TEXT,
   error_title    TEXT,
   error_body     TEXT,
+  error_scene    INTEGER,               -- 문제가 된 장면 번호(1부터). 없으면 NULL
   error_detail   TEXT,                  -- 개발자용 상세(ffmpeg 오류 끝부분 등). 화면에는 보여주지 않는다.
   step           INTEGER NOT NULL DEFAULT 1,  -- 0 요청 접수 · 1 대기열 · 2 장면 화면 만들기 · 3 MP4 저장 (활성 단계 번호)
   video_file     TEXT,
@@ -75,9 +76,10 @@ export function openDb(dataDir: string): Db {
   return db;
 }
 
-/** 1단계에서 만든 DB(렌더 작업 컬럼이 없는 상태)를 2단계 스키마로 올린다. */
+/** 이전 단계에서 만든 DB(렌더 작업 컬럼이 모자란 상태)를 현재 스키마로 올린다. */
 function migrate(db: Db) {
   const cols = (db.prepare(`PRAGMA table_info(render_jobs)`).all() as Array<{ name: string }>).map((c) => c.name);
   if (!cols.includes('step')) db.exec(`ALTER TABLE render_jobs ADD COLUMN step INTEGER NOT NULL DEFAULT 1`);
   if (!cols.includes('error_detail')) db.exec(`ALTER TABLE render_jobs ADD COLUMN error_detail TEXT`);
+  if (!cols.includes('error_scene')) db.exec(`ALTER TABLE render_jobs ADD COLUMN error_scene INTEGER`);
 }

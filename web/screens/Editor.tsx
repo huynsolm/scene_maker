@@ -24,7 +24,11 @@ import { ConfirmModal } from './ConfirmModal';
 export function Editor({ projectId }: { projectId: string }) {
   const toast = useToast();
   const ed = useProjectEditor(projectId, toast.show);
-  const [sel, setSel] = useState(0);
+  // 결과 화면의 "장면 N 편집에서 확인하기" 같은 링크(?scene=N)로 들어오면 그 장면을 먼저 보여준다.
+  const [sel, setSel] = useState(() => {
+    const n = Number(new URLSearchParams(window.location.search).get('scene'));
+    return Number.isInteger(n) && n >= 1 && n <= SCENE_COUNT ? n - 1 : 0;
+  });
   const [guides, setGuides] = useState(true);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [starting, setStarting] = useState(false);
@@ -32,6 +36,11 @@ export function Editor({ projectId }: { projectId: string }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const titleRef = useRef<HTMLInputElement>(null);
   const textRef = useRef<HTMLTextAreaElement>(null);
+
+  // 자막 글꼴(약 0.5MB)을 화면에 들어올 때 미리 받아 둔다(자막이 처음 그려질 때의 글꼴 깜빡임을 줄인다).
+  useEffect(() => {
+    void document.fonts?.load("600 16px 'Subtitle KR'", '가').catch(() => undefined);
+  }, []);
 
   // 미리보기 재생: 선택한 장면을 그 장면 길이만큼 재생한다.
   const [playing, setPlaying] = useState(false);
@@ -147,6 +156,11 @@ export function Editor({ projectId }: { projectId: string }) {
         <div className="total-chip">
           전체 길이 <strong>{total}초</strong>
         </div>
+        {project.lastVideo && (
+          <Link to={`/projects/${projectId}/result/${project.lastVideo.jobId}`} className="btn btn-ghost" style={{ color: 'var(--primary-text)' }}>
+            마지막 생성 영상 보기
+          </Link>
+        )}
         {busy ? (
           <button className="btn btn-soft" onClick={() => navigate(`/projects/${projectId}/result`)}>
             생성 진행 상황 보기
