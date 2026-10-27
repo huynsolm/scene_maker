@@ -17,7 +17,7 @@
     "compare:frame": "tsx scripts/compare-frame.ts"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22 <23"
   },
   "dependencies": {
     "@fastify/multipart": "^10.1.6",
