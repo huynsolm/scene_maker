@@ -116,6 +116,26 @@ describe('1단계 화면 흐름', () => {
     await page.close();
   });
 
+  it('붙여 넣은 글의 제로폭 문자는 제거되어 글자 수와 저장 값에 들어가지 않는다', async () => {
+    const page = await env.newPage();
+    await newProject(page);
+    const pasted = '가\u200B나\u200D다\uFEFF라';
+    await page.locator('#scene-text').focus();
+    await page.evaluate((t) => {
+      const el = document.getElementById('scene-text') as HTMLTextAreaElement;
+      const data = new DataTransfer();
+      data.setData('text', t);
+      el.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+    }, pasted);
+    await eventually(async () => (await page.locator('#scene-text').inputValue()) === '가나다라', '제로폭 문자 제거');
+    await eventually(hasText(page, '.col-inspector', '4 / 40자 권장'), '글자 수 4');
+    await eventually(hasText(page, '[data-testid=save-state]', '저장됨'), '저장됨');
+    const id = page.url().split('/').pop()!;
+    const saved = (await (await fetch(`${env.base}/api/projects/${id}`)).json()) as any;
+    expect(saved.project.scenes[0].text).toBe('가나다라');
+    await page.close();
+  });
+
   it('이미지 업로드: 올리면 미리보기에 나오고, 새로고침 후에도 남고, 삭제하면 비어 있는 상태로 돌아간다', async () => {
     const page = await env.newPage();
     await newProject(page);

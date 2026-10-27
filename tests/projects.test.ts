@@ -146,3 +146,46 @@ describe('한글 정규화(NFC)', () => {
     expect(tooLong.statusCode).toBe(400);
   });
 });
+
+describe('저장 경계의 문구 정리(보이지 않는 문자·줄바꿈)', () => {
+  async function put(app: any, id: string, title: string, text: string) {
+    return app.inject({
+      method: 'PUT',
+      url: `/api/projects/${id}`,
+      payload: validSave({ title, scenes: [{ text, durationSec: 10 }, { text: '', durationSec: 10 }, { text: '', durationSec: 10 }] }),
+    });
+  }
+  const textOf = async (app: any, id: string) => (await app.inject({ url: `/api/projects/${id}` })).json().project.scenes[0].text as string;
+
+  it('제로폭 문자는 DB 에 남지 않고, 영상·미리보기와 같은 글자가 저장된다', async () => {
+    const { app } = await setup();
+    const { project } = (await app.inject({ method: 'POST', url: '/api/projects' })).json();
+    expect((await put(app, project.id, 't', '가\u200B나다')).statusCode).toBe(200);
+    expect(await textOf(app, project.id)).toBe('가나다');
+    for (const junk of ['\u200D', '\uFEFF', '\uFE0F', '\u202E', '\u0007']) {
+      await put(app, project.id, 't', `가${junk}나다`);
+      expect(await textOf(app, project.id), `U+${junk.charCodeAt(0).toString(16)}`).toBe('가나다');
+    }
+  });
+
+  it('글자 수 한도는 정리한 뒤의 글자로 센다(영상에서 제거될 문자 때문에 거부하지 않는다)', async () => {
+    const { app } = await setup();
+    const { project } = (await app.inject({ method: 'POST', url: '/api/projects' })).json();
+    // 보이는 글자 200개 + 제로폭 문자 여러 개: 정리하면 200자라서 저장된다
+    const ok = await put(app, project.id, 't', '가'.repeat(100) + '\u200B\u200D\uFEFF' + '나'.repeat(100) + '\u200B');
+    expect(ok.statusCode).toBe(200);
+    expect(Array.from(await textOf(app, project.id))).toHaveLength(200);
+    // 보이는 글자가 201개면 제로폭 문자와 상관없이 거부
+    const over = await put(app, project.id, 't', '가'.repeat(201) + '\u200B');
+    expect(over.statusCode).toBe(400);
+  });
+
+  it('CRLF·CR 은 \\n 으로 통일되고, 제목은 한 줄로 정리된다', async () => {
+    const { app } = await setup();
+    const { project } = (await app.inject({ method: 'POST', url: '/api/projects' })).json();
+    await put(app, project.id, '매장\n재고\u200B', '첫째\r\n둘째\r셋째');
+    const saved = (await app.inject({ url: `/api/projects/${project.id}` })).json().project;
+    expect(saved.scenes[0].text).toBe('첫째\n둘째\n셋째');
+    expect(saved.title).toBe('매장 재고');
+  });
+});

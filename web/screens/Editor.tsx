@@ -11,6 +11,7 @@ import {
   TEXT_RECOMMENDED_LENGTH,
   VIDEO,
 } from '../../shared/limits';
+import { cleanText } from '../../shared/text';
 import type { Project } from '../../shared/types';
 import { ApiFailure, api } from '../api';
 import { CenterMessage, SampleTag } from '../components';
@@ -351,10 +352,10 @@ export function Editor({ projectId }: { projectId: string }) {
               placeholder="이 장면에서 보여줄 안내 문장을 입력하세요"
               onChange={(e) => ed.setText(sel, e.target.value)}
               onPaste={(e) => {
-                // macOS 등에서 복사한 한글은 분해된 자모(NFD)일 수 있다. 그대로 붙이면 글자 수 한도(maxLength)가 일찍 차서 뒤가 잘리므로
-                // 붙여 넣는 순간 NFC 로 합친다(입력 중 IME 조합에는 손대지 않는다).
+                // 복사해 온 글에는 분해된 한글 자모(NFD, macOS)나 보이지 않는 문자(제로폭 공백 등)가 섞여 있을 수 있다. 그대로 붙이면
+                // 글자 수 한도(maxLength)를 일찍 채워 뒤가 잘리므로 붙여 넣는 순간 저장 때와 같은 규칙으로 정리한다(입력 중 IME 조합에는 손대지 않는다).
                 const raw = e.clipboardData.getData('text');
-                const nfc = raw.normalize('NFC');
+                const nfc = cleanText(raw);
                 if (nfc === raw) return;
                 e.preventDefault();
                 const el = e.currentTarget;
