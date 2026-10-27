@@ -187,6 +187,31 @@ d('실제 ffmpeg 렌더링', () => {
     expect(near(px(f2, 4, 4), [255, 255, 255], 20), '알파를 무시한 순백이면 안 된다').toBe(false);
   }, 120_000);
 
+  it('분해된 한글(NFD)로 입력한 문구도 NFC 와 같은 크기의 자막 상자로 그려진다', async () => {
+    const a = await makeApp(undefined, {});
+    apps.push(a.app);
+    const p = createSampleProject(a.store);
+    const ko = '재고 화면에서 현재 수량과 부족한 품목을 확인하세요.';
+    // API 는 저장할 때 NFC 로 합치므로, 렌더러 직접 경로(레이아웃)에도 NFD 를 그대로 넣어 이중으로 확인한다
+    const want = layoutSubtitle(ko, loadMeasurer(path.resolve('fonts/NotoSansKR-SemiBold.ttf'))).box;
+    const viaLayout = layoutSubtitle(ko.normalize('NFD'), loadMeasurer(path.resolve('fonts/NotoSansKR-SemiBold.ttf'))).box;
+    expect(viaLayout).toEqual(want);
+    await a.app.inject({
+      method: 'PUT',
+      url: `/api/projects/${p.id}`,
+      payload: validSave({ title: 'NFD', scenes: [{ text: ko.normalize('NFD'), durationSec: 3 }, { text: '둘', durationSec: 3 }, { text: '셋', durationSec: 3 }] }),
+    });
+    const j = (await a.app.inject({ method: 'POST', url: `/api/projects/${p.id}/renders` })).json().job;
+    await waitFor(async () => {
+      const v = (await a.app.inject({ url: `/api/renders/${j.id}` })).json().job;
+      if (v.status === 'failed') throw new Error(JSON.stringify(v.error));
+      return v.status === 'done';
+    }, '렌더 완료', 90_000);
+    const got = boxBounds(frame(a.renders.videoPathFor(p.id, j.id), 1.5));
+    expect(Math.abs(got.w - want.w), '상자 폭').toBeLessThanOrEqual(4);
+    expect(Math.abs(got.h - want.h), '상자 높이').toBeLessThanOrEqual(4);
+  }, 120_000);
+
   it('긴 한국어 3줄 문구도 상자가 안전 영역 안에 있고 글자가 잘리지 않는다', async () => {
     const a = await makeApp(undefined, {});
     apps.push(a.app);

@@ -350,6 +350,20 @@ export function Editor({ projectId }: { projectId: string }) {
               value={cur.text}
               placeholder="이 장면에서 보여줄 안내 문장을 입력하세요"
               onChange={(e) => ed.setText(sel, e.target.value)}
+              onPaste={(e) => {
+                // macOS 등에서 복사한 한글은 분해된 자모(NFD)일 수 있다. 그대로 붙이면 글자 수 한도(maxLength)가 일찍 차서 뒤가 잘리므로
+                // 붙여 넣는 순간 NFC 로 합친다(입력 중 IME 조합에는 손대지 않는다).
+                const raw = e.clipboardData.getData('text');
+                const nfc = raw.normalize('NFC');
+                if (nfc === raw) return;
+                e.preventDefault();
+                const el = e.currentTarget;
+                const start = el.selectionStart;
+                const next = (el.value.slice(0, start) + nfc + el.value.slice(el.selectionEnd)).slice(0, 200);
+                ed.setText(sel, next);
+                const caret = Math.min(start + nfc.length, next.length);
+                requestAnimationFrame(() => el.setSelectionRange(caret, caret));
+              }}
             />
             {textLen === 0 && <span className="note-warn">문구가 비어 있어요. 영상 아래쪽 자막으로 보여줄 문장을 입력해 주세요.</span>}
             {textLen > TEXT_RECOMMENDED_LENGTH && <span className="note-warn">문구가 길어서 자막이 3줄 이상이 될 수 있어요. 짧게 나누면 더 읽기 쉬워요.</span>}

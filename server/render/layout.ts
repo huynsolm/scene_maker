@@ -15,6 +15,23 @@ export interface SubtitleLayout {
 
 const pct = (v: number, of: number) => (of * v) / 100;
 
+// 글자가 그려지지 않는데도 폭 측정이 `.notdef` 폭을 세던 문자들(제로폭 공백·접합자, 방향 제어, 변이 선택자, BOM, 소프트 하이픈)과 제어 문자.
+// 브라우저·libass 는 이 문자들을 폭 0 으로 다루므로 제거해도 화면은 같다. 줄바꿈(\n)과 탭은 남긴다(탭은 레이아웃이 공백으로 줄인다).
+// eslint-disable-next-line no-control-regex
+const INVISIBLE_OR_CONTROL = /[\u0000-\u0008\u000B-\u001F\u007F-\u009F\u00AD\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFE00-\uFE0F\uFEFF]/g;
+
+/**
+ * 영상 파이프라인(폭 측정·줄바꿈·ASS)에 넣기 전의 문구 정리.
+ *  - NFC 로 합친다: macOS 등에서 붙여 넣은 분해된 한글 자모(NFD)는 글꼴이 GSUB 로 합쳐 그리지만 서버의 글자별 폭 합산은
+ *    그 규칙을 적용하지 않아 폭이 2배 이상으로 계산됐다(브라우저와 비교해 +980px).
+ *  - 보이지 않는 문자와 제어 문자를 제거한다.
+ * 폭 측정이 브라우저(HarfBuzz)와 맞는 범위는 이 정리를 거친 NFC 한글·라틴·숫자·문장부호이며, 옛한글 자모 조합·이모지·전각 문자·
+ * 라틴 합자(fi, fl 등)는 맞지 않을 수 있다(docs/stage3-review.md, e2e/measure-parity.e2e.ts).
+ */
+export function normalizeSubtitleText(text: string): string {
+  return text.normalize('NFC').replace(INVISIBLE_OR_CONTROL, '');
+}
+
 /** 공백 기준으로 가능한 한 채워 넣는 줄바꿈. 한 단어가 너무 길면 글자 단위로 자른다. */
 function greedy(words: string[], maxW: number, width: (s: string) => number): string[] {
   const lines: string[] = [];
@@ -74,7 +91,7 @@ export function layoutSubtitle(text: string, measurer: Measurer): SubtitleLayout
   const w = (s: string) => measurer.width(s, emPx);
 
   // 미리보기(CSS white-space: pre-line)와 같이 사용자가 넣은 줄바꿈은 지키고, 공백은 하나로 줄인다.
-  const paragraphs = text
+  const paragraphs = normalizeSubtitleText(text)
     .replace(/\r\n?/g, '\n')
     .split('\n')
     .map((p) => p.replace(/[ \t]+/g, ' ').trim());

@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { SUBTITLE, VIDEO } from '../shared/limits';
 import { buildAss, escapeAssText } from '../server/render/ass';
 import { loadMeasurer } from '../server/render/font';
-import { layoutSubtitle } from '../server/render/layout';
+import { layoutSubtitle, normalizeSubtitleText } from '../server/render/layout';
 
 const measurer = loadMeasurer(path.resolve('fonts/NotoSansKR-SemiBold.ttf'));
 const L = (t: string) => layoutSubtitle(t, measurer);
@@ -71,6 +71,37 @@ describe('자막 레이아웃', () => {
   it('최대 길이(200자)도 상자가 프레임 위쪽 안전 영역(10%) 안에 머문다', () => {
     const l = L('안내 문구입니다 '.repeat(25).trim().slice(0, 200));
     expect(l.box.y).toBeGreaterThanOrEqual((VIDEO.height * 10) / 100);
+  });
+});
+
+describe('문구 정리(NFC·보이지 않는 문자)', () => {
+  const ko = '매장에 우유가 부족한지 확인하기 어려우셨나요? 재고 화면에서 현재 수량과 부족한 품목을 한눈에 확인하고 발주 목록에 바로 추가해 보세요.';
+
+  it('분해된 한글 자모(NFD)는 NFC 와 같은 줄바꿈·상자 크기가 된다(정리하지 않으면 폭이 2배 이상으로 계산됐다)', () => {
+    const nfd = ko.normalize('NFD');
+    expect(nfd).not.toBe(ko);
+    expect(nfd.length).toBeGreaterThan(ko.length * 2);
+    const a = L(ko);
+    const b = L(nfd);
+    expect(b.lines).toEqual(a.lines);
+    expect(b.box).toEqual(a.box);
+    expect(b.lines.join('')).not.toMatch(/[\u1100-\u11FF]/); // ASS 로 나가는 줄에 분해된 자모가 남지 않는다
+  });
+
+  it('제로폭 문자·제어 문자·변이 선택자는 폭에 영향을 주지 않는다', () => {
+    const clean = L('가나다 라마바');
+    for (const junk of ['\u200B', '\u200D', '\u2060', '\uFEFF', '\u00AD', '\uFE0F', '\u202E', '\u0007']) {
+      const l = L(`가나${junk}다 라마${junk}바`);
+      expect(l.lines, `U+${junk.charCodeAt(0).toString(16)}`).toEqual(clean.lines);
+      expect(l.box.w).toBeCloseTo(clean.box.w, 5);
+    }
+  });
+
+  it('normalizeSubtitleText: NFC 로 합치고, 줄바꿈과 일반 공백·NBSP 는 남긴다', () => {
+    expect(normalizeSubtitleText('가'.normalize('NFD'))).toBe('가');
+    expect(normalizeSubtitleText('cafe\u0301')).toBe('café');
+    expect(normalizeSubtitleText('a\nb c\u00A0d')).toBe('a\nb c\u00A0d');
+    expect(normalizeSubtitleText('a\u200Bb')).toBe('ab');
   });
 });
 

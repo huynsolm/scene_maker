@@ -97,6 +97,25 @@ describe('1단계 화면 흐름', () => {
     await page.close();
   });
 
+  it('분해된 한글(NFD)을 붙여 넣으면 NFC 로 합쳐져 글자 수 한도에 잘리지 않는다', async () => {
+    const page = await env.newPage();
+    await newProject(page);
+    const nfd = '매'.repeat(150).normalize('NFD'); // 붙여 넣은 원문은 450 칸(maxLength 200 을 넘는다)
+    await page.locator('#scene-text').focus();
+    await page.evaluate((t) => {
+      const el = document.getElementById('scene-text') as HTMLTextAreaElement;
+      const data = new DataTransfer();
+      data.setData('text', t);
+      el.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+    }, nfd);
+    await eventually(async () => (await page.locator('#scene-text').inputValue()) === '매'.repeat(150), 'NFC 로 합쳐 150자 모두 유지');
+    await eventually(hasText(page, '.col-inspector', '150 / 40자 권장'), '글자 수 150');
+    await eventually(hasText(page, '[data-testid=save-state]', '저장됨'), '저장됨');
+    await page.reload();
+    await eventually(async () => (await page.locator('#scene-text').inputValue()) === '매'.repeat(150), '새로고침 후에도 유지');
+    await page.close();
+  });
+
   it('이미지 업로드: 올리면 미리보기에 나오고, 새로고침 후에도 남고, 삭제하면 비어 있는 상태로 돌아간다', async () => {
     const page = await env.newPage();
     await newProject(page);

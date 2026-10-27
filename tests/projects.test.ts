@@ -120,3 +120,29 @@ describe('장면 길이 · 입력 검증', () => {
     expect(res.statusCode).toBe(200);
   });
 });
+
+describe('한글 정규화(NFC)', () => {
+  it('분해된 한글(NFD)로 저장해도 NFC 로 저장되고, 글자 수 한도는 합친 뒤 센다', async () => {
+    const { app } = await setup();
+    const { project } = (await app.inject({ method: 'POST', url: '/api/projects' })).json();
+    const nfdTitle = '매장 재고'.normalize('NFD');
+    const nfdText = '매'.repeat(150).normalize('NFD'); // NFD 로는 450 칸이지만 NFC 로는 150자
+    const res = await app.inject({
+      method: 'PUT',
+      url: `/api/projects/${project.id}`,
+      payload: validSave({ title: nfdTitle, scenes: [{ text: nfdText, durationSec: 10 }, { text: '둘', durationSec: 10 }, { text: '셋', durationSec: 10 }] }),
+    });
+    expect(res.statusCode).toBe(200);
+    const saved = (await app.inject({ url: `/api/projects/${project.id}` })).json().project;
+    expect(saved.title).toBe('매장 재고');
+    expect(saved.title).toBe(saved.title.normalize('NFC'));
+    expect(saved.scenes[0].text).toBe('매'.repeat(150));
+    // 합쳐도 200자를 넘으면 거부
+    const tooLong = await app.inject({
+      method: 'PUT',
+      url: `/api/projects/${project.id}`,
+      payload: validSave({ scenes: [{ text: '매'.repeat(201).normalize('NFD'), durationSec: 10 }, { text: '', durationSec: 10 }, { text: '', durationSec: 10 }] }),
+    });
+    expect(tooLong.statusCode).toBe(400);
+  });
+});
