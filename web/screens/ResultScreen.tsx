@@ -19,17 +19,25 @@ export function ResultScreen({ projectId, jobId }: Props) {
   const [job, setJob] = useState<RenderJobView | null | undefined>(undefined); // undefined = 불러오는 중
   const [project, setProject] = useState<Project | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [missing, setMissing] = useState(false); // 없는 작업이거나 이 프로젝트의 작업이 아님
   const [retrying, setRetrying] = useState(false);
   const retryingRef = useRef(false);
   const toast = useToast();
 
   const load = useCallback(async () => {
     try {
-      const j = jobId ? await api.getRender(jobId) : await api.latestRender(projectId);
+      const j = jobId ? await api.getRender(projectId, jobId) : await api.latestRender(projectId);
+      // 서버가 이미 소속을 검증하지만, 응답이 다른 프로젝트의 것이면 화면에 그리지 않는다(이중 방어).
+      if (j && j.projectId !== projectId) {
+        setMissing(true);
+        return;
+      }
+      setMissing(false);
       setJob(j);
       setLoadError(null);
     } catch (e) {
-      setLoadError(e instanceof Error ? e.message : '상태를 불러오지 못했어요.');
+      if (e instanceof ApiFailure && e.status === 404) setMissing(true);
+      else setLoadError(e instanceof Error ? e.message : '상태를 불러오지 못했어요.');
     }
   }, [projectId, jobId]);
   useEffect(() => void load(), [load]);
@@ -68,6 +76,17 @@ export function ResultScreen({ projectId, jobId }: Props) {
     }
   };
 
+  if (missing)
+    return (
+      <CenterMessage title="영상을 찾을 수 없어요" body="주소가 잘못되었거나, 삭제되었거나, 이 프로젝트의 영상이 아닐 수 있어요.">
+        <Link to={`/projects/${projectId}`} className="btn btn-primary">
+          편집 화면으로 돌아가기
+        </Link>
+        <Link to="/" className="btn btn-secondary">
+          프로젝트 목록
+        </Link>
+      </CenterMessage>
+    );
   if (job === undefined && !loadError) return <CenterMessage title="불러오는 중…" />;
   if (job === undefined)
     return (

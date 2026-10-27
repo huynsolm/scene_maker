@@ -55,7 +55,9 @@ export const api = {
     request<{ project: Project }>('PUT', `/api/projects/${id}`, body).then((r) => r.project),
   deleteProject: (id: string) => request<void>('DELETE', `/api/projects/${id}`),
   createRender: (id: string) => request<{ job: RenderJobView }>('POST', `/api/projects/${id}/renders`).then((r) => r.job),
-  getRender: (jobId: string) => request<{ job: RenderJobView }>('GET', `/api/renders/${jobId}`).then((r) => r.job),
+  /** 프로젝트 소속이 맞는 작업만 돌려준다(다른 프로젝트의 작업 ID 면 404). */
+  getRender: (projectId: string, jobId: string) =>
+    request<{ job: RenderJobView }>('GET', `/api/projects/${projectId}/renders/${jobId}`).then((r) => r.job),
   latestRender: (id: string) =>
     request<{ job: RenderJobView | null }>('GET', `/api/projects/${id}/renders/latest`).then((r) => r.job),
   uploadImage: (id: string, position: number, file: File) => {

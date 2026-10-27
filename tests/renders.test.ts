@@ -212,6 +212,34 @@ describe('마지막 완성 영상', () => {
   });
 });
 
+describe('작업의 프로젝트 소속 검증', () => {
+  it('프로젝트 경로로 조회하면 그 프로젝트의 작업만 돌려주고, 다른 프로젝트의 작업 ID 는 404 다', async () => {
+    const a = await setup();
+    const other = createSampleProject(a.store);
+    const jobA = (await post(a.app, a.project.id)).json().job;
+    await waitFor(async () => (await job(a.app, jobA.id)).status === 'done', 'A 완료');
+    const jobB = (await post(a.app, other.id)).json().job;
+    await waitFor(async () => (await job(a.app, jobB.id)).status === 'done', 'B 완료');
+
+    const own = await a.app.inject({ url: `/api/projects/${a.project.id}/renders/${jobA.id}` });
+    expect(own.statusCode).toBe(200);
+    expect(own.json().job.id).toBe(jobA.id);
+
+    // A 프로젝트 경로에 B 의 작업 ID: 내용(제목·문구·영상 주소)을 돌려주지 않는다
+    const cross = await a.app.inject({ url: `/api/projects/${a.project.id}/renders/${jobB.id}` });
+    expect(cross.statusCode).toBe(404);
+    expect(cross.body).not.toContain(jobB.id);
+    expect(cross.body).not.toContain('video');
+    // 반대 방향도 같다
+    expect((await a.app.inject({ url: `/api/projects/${other.id}/renders/${jobA.id}` })).statusCode).toBe(404);
+    // 없는 작업·없는 프로젝트
+    expect((await a.app.inject({ url: `/api/projects/${a.project.id}/renders/nope` })).statusCode).toBe(404);
+    expect((await a.app.inject({ url: `/api/projects/00000000-0000-4000-8000-000000000000/renders/${jobA.id}` })).statusCode).toBe(404);
+    // 'latest' 는 작업 ID 로 해석되지 않고 기존 동작(가장 최근 작업)을 유지한다
+    expect((await a.app.inject({ url: `/api/projects/${a.project.id}/renders/latest` })).json().job.id).toBe(jobA.id);
+  });
+});
+
 describe('실패와 재시도', () => {
   it('실패하면 이유를 남기고 입력·이미지는 그대로이며, 재시도는 새 작업으로 성공한다', async () => {
     const a = await setup();

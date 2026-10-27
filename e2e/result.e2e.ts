@@ -178,6 +178,29 @@ describe('결과 화면', () => {
     await page.close();
   }, 180_000);
 
+  it('다른 프로젝트의 작업 ID 로 결과 주소를 열면 그 영상·문구를 보여주지 않고 안내한다', async () => {
+    const a = quickProject('프로젝트 A 비공개 제목');
+    const b = quickProject('프로젝트 B 비공개 제목');
+    const jobB = await renderDone(b.id);
+    await renderDone(a.id);
+    const page = await env.newPage();
+
+    // 정상: B 의 작업은 B 경로에서 열린다
+    await page.goto(`${env.base}/projects/${b.id}/result/${jobB.id}`);
+    await eventually(hasText(page, '.panel', '영상이 완성됐어요'), 'B 경로의 B 작업');
+
+    // 비정상: A 경로 + B 의 작업 ID
+    await page.goto(`${env.base}/projects/${a.id}/result/${jobB.id}`);
+    await eventually(hasText(page, '.center-msg', '영상을 찾을 수 없어요'), '안내 표시');
+    const text = await page.locator('body').innerText();
+    expect(text).not.toContain('프로젝트 B 비공개 제목');
+    expect(text).not.toContain('장면 1 안내 문구입니다'); // B 의 구성 장면도 보이지 않는다
+    expect(await page.locator('[data-testid=player]').count()).toBe(0);
+    // 돌아갈 곳은 A 의 편집 화면과 목록
+    expect(await page.getByRole('link', { name: '편집 화면으로 돌아가기' }).getAttribute('href')).toBe(`/projects/${a.id}`);
+    await page.close();
+  }, 120_000);
+
   for (const width of [390, 320]) {
     it(`${width}px 너비: 결과 화면(완료·실패)이 가로 스크롤 없이 쓰인다`, async () => {
       const p = quickProject(`좁은 화면 ${width}`, [3, 3, 3]);

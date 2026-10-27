@@ -7,7 +7,7 @@ import { IMAGE_MAX_BYTES } from '../shared/limits';
 import { saveProjectSchema } from '../shared/schemas';
 import { loadConfig, type Config } from './config';
 import { openDb } from './db';
-import { AppError } from './errors';
+import { AppError, notFound } from './errors';
 import { FfmpegRenderer, type Renderer } from './render/renderer';
 import { RenderQueue } from './renderQueue';
 import { RenderStore } from './renderStore';
@@ -121,6 +121,14 @@ export async function buildApp(config: AppConfig, deps: { renderer?: Renderer } 
   app.get<IdParams>('/api/projects/:id/renders/latest', async (req) => {
     const job = renders.latestForProject(req.params.id);
     return { job: job ? renders.toView(job) : null };
+  });
+
+  // 프로젝트 경로 아래에서 특정 작업을 조회한다. 다른 프로젝트의 작업 ID 는 404 로 취급해
+  // 주소(/projects/A/result/<B 의 작업>)로 다른 프로젝트의 영상·문구가 보이지 않게 한다.
+  app.get<{ Params: { id: string; jobId: string } }>('/api/projects/:id/renders/:jobId', async (req) => {
+    const job = renders.requireJob(req.params.jobId);
+    if (job.project_id !== req.params.id) throw notFound('작업');
+    return { job: renders.toView(job) };
   });
 
   app.get<IdParams>('/api/renders/:id', async (req) => ({ job: renders.toView(renders.requireJob(req.params.id)) }));
