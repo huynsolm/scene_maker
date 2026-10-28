@@ -6,7 +6,7 @@
 > 검수 문서: [1단계](docs/stage1-review.md) · [2단계](docs/stage2-review.md) · [3단계](docs/stage3-review.md) · [미리보기↔영상 비교](docs/frame-comparison.md)
 
 ## 요구 사항
-- **Node.js 22.x** (`.nvmrc`). 다른 버전에서는 `.npmrc` 의 `engine-strict` 때문에 `npm install`/`npm ci` 가 설치 초기에 중단된다.
+- **Node.js 22.23.4 이상, 23 미만** (`package.json` 의 `engines`, `.nvmrc` 는 최소 버전 22.23.4). 보안 패치가 포함된 최소 버전이다. 이 범위 밖에서는 `.npmrc` 의 `engine-strict` 때문에 `npm install`/`npm ci` 가 설치 초기에 중단된다.
 - **ffmpeg / ffprobe 6 이상** (`libx264`, `libass` 포함 빌드). 없으면 영상 생성이 `FFMPEG_NOT_FOUND` 로 실패한다.
 
 ## 실행
