@@ -136,6 +136,59 @@ describe('1단계 화면 흐름', () => {
     await page.close();
   });
 
+  it('제목에도 붙여넣기 정리가 적용되어 제로폭 문자 때문에 보이는 글자가 잘리지 않는다', async () => {
+    const page = await env.newPage();
+    await newProject(page);
+    const visible100 = '가'.repeat(100);
+    await page.getByLabel('영상 제목').focus();
+    await page.evaluate((t) => {
+      const el = document.querySelector('.title-input') as HTMLInputElement;
+      const data = new DataTransfer();
+      data.setData('text', t);
+      el.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+    }, '\u200B' + visible100); // 원문은 101 칸(maxLength 100 을 넘는다)
+    await eventually(async () => (await page.getByLabel('영상 제목').inputValue()) === visible100, '보이는 100자가 모두 유지됨');
+    await eventually(hasText(page, '[data-testid=save-state]', '저장됨'), '저장됨');
+    const id = page.url().split('/').pop()!;
+    expect(((await (await fetch(`${env.base}/api/projects/${id}`)).json()) as any).project.title).toBe(visible100);
+    await page.close();
+  });
+
+  it('200자 경계에서 붙여 넣어도 이모지를 쪼개지 않는다(깨진 문자열이 되지 않음)', async () => {
+    const page = await env.newPage();
+    await newProject(page);
+    await page.locator('#scene-text').fill('a'.repeat(199));
+    await page.locator('#scene-text').focus();
+    await page.evaluate(() => {
+      const el = document.getElementById('scene-text') as HTMLTextAreaElement;
+      el.setSelectionRange(el.value.length, el.value.length);
+      const data = new DataTransfer();
+      data.setData('text', '\u200B😀'); // 정리하면 이모지만 남아 합이 UTF-16 201 칸
+      el.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+    });
+    await eventually(async () => (await page.locator('#scene-text').inputValue()) === 'a'.repeat(199), '이모지를 통째로 버리고 199자 유지');
+    expect(await page.locator('#scene-text').evaluate((el) => (el as HTMLTextAreaElement).value.isWellFormed())).toBe(true);
+    await page.close();
+  });
+
+  it('붙여넣기가 아닌 입력으로 들어온 보이지 않는 문자도 저장 뒤 화면이 서버가 정리한 값으로 맞춰진다', async () => {
+    const page = await env.newPage();
+    await newProject(page);
+    // fill 은 paste 가 아니라 input 이벤트로 값을 넣는다(드래그 앤 드롭·자동 완성 같은 경로)
+    await page.locator('#scene-text').fill('가\u200B나다');
+    await page.getByLabel('영상 제목').fill('매\u200B장 재고');
+    await eventually(hasText(page, '[data-testid=save-state]', '저장됨'), '저장됨');
+    await eventually(async () => (await page.locator('#scene-text').inputValue()) === '가나다', '문구가 정리된 값으로 맞춰짐');
+    await eventually(async () => (await page.getByLabel('영상 제목').inputValue()) === '매장 재고', '제목이 정리된 값으로 맞춰짐');
+    await eventually(hasText(page, '.col-inspector', '3 / 40자 권장'), '글자 수 3');
+    // 맞춘 값이 다시 저장되는 반복은 없다: 잠시 뒤에도 저장됨 상태
+    await new Promise((r) => setTimeout(r, 1500));
+    expect((await page.locator('[data-testid=save-state]').innerText()).includes('저장됨')).toBe(true);
+    await page.reload();
+    await eventually(async () => (await page.locator('#scene-text').inputValue()) === '가나다', '새로고침 후에도 같음');
+    await page.close();
+  });
+
   it('이미지 업로드: 올리면 미리보기에 나오고, 새로고침 후에도 남고, 삭제하면 비어 있는 상태로 돌아간다', async () => {
     const page = await env.newPage();
     await newProject(page);

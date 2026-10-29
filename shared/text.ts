@@ -7,9 +7,12 @@
  * 저장·미리보기·영상이 같은 글자를 보도록 저장 경계에서 한 번 정리하고, 영상 파이프라인에서도 한 번 더 적용한다(이전에 저장된 값 방어).
  */
 
-// 그려지지 않는 문자들: 소프트 하이픈, 제로폭 공백·접합자·방향 표시(U+200B–200F), 방향 제어(U+202A–202E, U+2066–2069),
-// 단어 결합자 등(U+2060–2064), 변이 선택자(U+FE00–FE0F), BOM(U+FEFF). 그리고 줄바꿈(\n)·탭을 뺀 제어 문자.
-// 브라우저와 libass 는 모두 폭 0 으로 다루므로 제거해도 화면은 같다.
+// 제거하는 문자들: 제로폭 공백·접합자·방향 표시(U+200B–200F), 방향 제어(U+202A–202E, U+2066–2069), 단어 결합자 등(U+2060–2064),
+// 변이 선택자(U+FE00–FE0F), BOM(U+FEFF), 그리고 줄바꿈(\n)·탭을 뺀 제어 문자. 이 문자들은 브라우저와 libass 모두 폭 0 으로 다루므로
+// 제거해도 화면은 같다.
+// 예외: 소프트 하이픈(U+00AD)은 줄바꿈 지점에서 하이픈으로 보일 수 있다(라틴 단어를 나눌 때). 한글 중심의 자막에서는
+// 이 동작을 지원하지 않기로 하고 **의도적으로 폐기**한다(폭을 재는 쪽과 줄바꿈이 맞지 않아 어긋나기 때문).
+// 이모지·복합 문자 체계의 ZWJ(U+200D)·VS16(U+FE0F)도 같은 이유로 지원 범위 밖이다.
 // eslint-disable-next-line no-control-regex
 const INVISIBLE_OR_CONTROL = /[\u0000-\u0008\u000B-\u001F\u007F-\u009F­​-‏‪-‮⁠-⁤⁦-⁩︀-️﻿]/g;
 
@@ -21,4 +24,16 @@ export function cleanText(text: string): string {
 /** 제목: 한 줄이다. 줄바꿈과 탭은 공백으로 바꾼다. */
 export function cleanTitle(title: string): string {
   return cleanText(title).replace(/[\n\t]+/g, ' ');
+}
+
+/**
+ * UTF-16 길이 `max` 이하로 자른다. 잘리는 자리가 서로게이트 쌍(이모지 등)의 가운데면 앞 한 칸을 더 줄여
+ * 깨진 문자열(isWellFormed() === false)이 되지 않게 한다.
+ */
+export function truncateUtf16(text: string, max: number): string {
+  if (text.length <= max) return text;
+  let end = max;
+  const last = text.charCodeAt(end - 1);
+  if (last >= 0xd800 && last <= 0xdbff) end -= 1; // 상위 서로게이트만 남는 경우
+  return text.slice(0, end);
 }

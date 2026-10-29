@@ -9,6 +9,9 @@ export type LoadState = 'loading' | 'ready' | 'notfound' | 'error';
 
 const DEBOUNCE_MS = 900;
 
+const sameBody = (a: SaveBody, b: SaveBody) =>
+  a.title === b.title && a.scenes.length === b.scenes.length && a.scenes.every((s, i) => s.text === b.scenes[i]!.text && s.durationSec === b.scenes[i]!.durationSec);
+
 /**
  * 편집 화면의 상태 관리.
  *  - `draft`(제목·문구·길이)는 화면이 소유한다. 저장 응답으로 덮어쓰지 않으므로 입력 중인 글자가 사라지지 않는다.
@@ -33,6 +36,8 @@ export function useProjectEditor(id: string, onToast: (msg: string) => void) {
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const alive = useRef(true);
   const saveFailedRef = useRef(false);
+  // IME 조합 중에는 입력칸의 값을 바꾸면 조합이 깨지므로 서버가 정리한 값의 반영을 미룬다(다음 저장 때 반영).
+  const composing = useRef(false);
 
   const load = useCallback(async () => {
     setLoadState('loading');
@@ -85,6 +90,14 @@ export function useProjectEditor(id: string, onToast: (msg: string) => void) {
       if (version.current === sentVersion) {
         setSave('saved');
         setSavedAt(hm(new Date()));
+        // 서버는 저장할 때 문구·제목을 정리한다(NFC, 보이지 않는 문자 제거 — shared/text.ts). 붙여넣기가 아닌 입력(드래그 앤 드롭 등)으로
+        // 들어온 보이지 않는 문자가 화면에는 남고 저장값에서는 사라져 "저장됨"인데 둘이 다른 상태가 되지 않도록,
+        // 그 사이 더 고친 것이 없고 조합 중이 아닐 때 정리된 값으로 draft 를 맞춘다(version 은 올리지 않으므로 다시 저장하지 않는다).
+        const saved: SaveBody = { title: p.title, scenes: p.scenes.map((s) => ({ text: s.text, durationSec: s.durationSec })) };
+        if (!composing.current && draftRef.current && !sameBody(saved, draftRef.current)) {
+          draftRef.current = saved;
+          setDraft(saved);
+        }
       }
       return true;
     } catch (e) {
@@ -200,6 +213,9 @@ export function useProjectEditor(id: string, onToast: (msg: string) => void) {
   return {
     loadState, reload: load, project, draft, save, savedAt, saveError, uploading,
     setTitle, setText, setDuration, retrySave, saveNow, uploadImage, removeImage,
+    setComposing: (v: boolean) => {
+      composing.current = v;
+    },
     hasUnsaved: () => version.current !== savedVersion.current,
   };
 }

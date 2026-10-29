@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cleanText, cleanTitle } from '../shared/text';
+import { cleanText, cleanTitle, truncateUtf16 } from '../shared/text';
 
 describe('cleanText (저장 경계·붙여넣기·영상 파이프라인이 함께 쓰는 정리)', () => {
   it('NFC 로 합친다', () => {
@@ -33,5 +33,23 @@ describe('cleanText (저장 경계·붙여넣기·영상 파이프라인이 함�
 describe('cleanTitle', () => {
   it('한 줄로 만든다: 줄바꿈·탭은 공백, 보이지 않는 문자는 제거', () => {
     expect(cleanTitle('매장\n재고\t관리​'.normalize('NFD'))).toBe('매장 재고 관리');
+  });
+});
+
+describe('truncateUtf16', () => {
+  it('한도 이하면 그대로, 넘으면 한도에서 자른다', () => {
+    expect(truncateUtf16('abc', 5)).toBe('abc');
+    expect(truncateUtf16('abcdef', 4)).toBe('abcd');
+  });
+
+  it('이모지(서로게이트 쌍)의 가운데에서 자르지 않는다 — 깨진 문자열(isWellFormed 거짓)을 만들지 않는다', () => {
+    const s = 'a'.repeat(199) + '😀'; // UTF-16 길이 201, 200 번째 칸이 이모지의 앞 절반
+    const cut = truncateUtf16(s, 200);
+    expect(cut).toBe('a'.repeat(199));
+    expect(cut.isWellFormed()).toBe(true);
+    // 경계가 이모지 뒤라면 이모지를 유지한다
+    const keep = truncateUtf16('a'.repeat(198) + '😀' + 'b', 200);
+    expect(keep).toBe('a'.repeat(198) + '😀');
+    expect(keep.isWellFormed()).toBe(true);
   });
 });
