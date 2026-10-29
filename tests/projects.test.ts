@@ -189,3 +189,24 @@ describe('저장 경계의 문구 정리(보이지 않는 문자·줄바꿈)', (
     expect(saved.title).toBe('매장 재고');
   });
 });
+
+describe('Store 쓰기 시점의 정리(저장 불변식)', () => {
+  it('스키마를 거치지 않고 Store 를 직접 호출해도 보이지 않는 문자·NFD 는 저장되지 않는다', async () => {
+    const a = await setup();
+    const p = a.store.createProject({ title: '매\u200B장'.normalize('NFD') });
+    expect(p.title).toBe('매장');
+    const saved = a.store.saveProject(p.id, {
+      title: '재고\u200B관리',
+      scenes: [
+        { text: '가\u200B나다', durationSec: 10 },
+        { text: '라마'.normalize('NFD'), durationSec: 10 },
+        { text: '바\r\n사', durationSec: 10 },
+      ],
+    });
+    expect(saved.title).toBe('재고관리');
+    expect(saved.scenes.map((s) => s.text)).toEqual(['가나다', '라마', '바\n사']);
+    // 이미 정리된 값은 그대로(멱등)
+    const again = a.store.saveProject(p.id, { title: saved.title, scenes: saved.scenes.map((s) => ({ text: s.text, durationSec: s.durationSec })) });
+    expect(again.scenes.map((s) => s.text)).toEqual(['가나다', '라마', '바\n사']);
+  });
+});

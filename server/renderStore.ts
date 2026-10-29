@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { VIDEO } from '../shared/limits';
+import { cleanText, cleanTitle } from '../shared/text';
 import type { JobStatus, RenderJobView } from '../shared/types';
 import type { Db } from './db';
 import { AppError, notFound } from './errors';
@@ -55,9 +56,15 @@ export class RenderStore {
   createJob(projectId: string): JobRow {
     const project = this.store.getProject(projectId);
 
+    // 수정 전에 저장된 값(보이지 않는 문자나 NFD 가 섞인 값)도 영상에 쓰이는 값과 같은 규칙으로 정리한 뒤 검사하고 스냅샷에 담는다.
+    // 그렇지 않으면 `\u200B` 만 있는 문구가 필수값 검사(trim)를 통과해 빈 자막 영상이 만들어지고,
+    // 결과 화면의 문구와 영상의 문구가 달라진다. DB 를 일괄 변환하지 않고도 기존 데이터를 방어한다.
+    const title = cleanTitle(project.title);
+    const scenes = project.scenes.map((s) => ({ ...s, text: cleanText(s.text) }));
+
     const missing: string[] = [];
-    if (!project.title.trim()) missing.push('제목');
-    project.scenes.forEach((s, i) => {
+    if (!title.trim()) missing.push('제목');
+    scenes.forEach((s, i) => {
       if (!s.text.trim()) missing.push(`장면 ${i + 1} 문구`);
       if (!s.image) missing.push(`장면 ${i + 1} 이미지`);
     });
@@ -66,8 +73,8 @@ export class RenderStore {
     }
 
     const snapshot: Snapshot = {
-      title: project.title,
-      scenes: project.scenes.map((s) => ({
+      title,
+      scenes: scenes.map((s) => ({
         position: s.position,
         text: s.text,
         durationSec: s.durationSec,

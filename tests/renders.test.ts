@@ -212,6 +212,37 @@ describe('마지막 완성 영상', () => {
   });
 });
 
+describe('수정 전에 저장된 값(보이지 않는 문자)의 방어', () => {
+  // API 스키마를 거치지 않고 DB 에 직접 써서 '정리 규칙이 생기기 전에 저장된 값'을 재현한다.
+  const raw = (a: { store: any }, projectId: string, position: number, text: string) =>
+    db(a).prepare(`UPDATE scenes SET text = ? WHERE project_id = ? AND position = ?`).run(text, projectId, position);
+
+  it('보이지 않는 문자뿐인 문구·제목은 비어 있는 것으로 보고 생성을 거부한다(빈 자막 영상이 만들어지지 않는다)', async () => {
+    const a = await setup();
+    raw(a, a.project.id, 1, '\u200B\u200D\uFEFF');
+    db(a).prepare(`UPDATE projects SET title = ? WHERE id = ?`).run('\u200B', a.project.id);
+    const res = await post(a.app, a.project.id);
+    expect(res.statusCode).toBe(422);
+    expect(res.json().error.missing).toEqual(['제목', '장면 2 문구']);
+    expect(db(a).prepare(`SELECT COUNT(*) c FROM render_jobs`).get().c).toBe(0);
+    expect(a.renderer.calls).toHaveLength(0);
+  });
+
+  it('섞여 있는 값은 정리된 문구·제목으로 스냅샷을 만들고, 결과 화면·렌더러·영상이 같은 문자열을 쓴다', async () => {
+    const a = await setup();
+    raw(a, a.project.id, 0, '매\u200B장에 우유가\u200D 부족한지'.normalize('NFD'));
+    db(a).prepare(`UPDATE projects SET title = ? WHERE id = ?`).run('재고\u200B 관리\n사용법', a.project.id);
+    const created = (await post(a.app, a.project.id)).json().job;
+    const done = await waitFor(async () => {
+      const v = await job(a.app, created.id);
+      return v.status === 'done' ? v : null;
+    }, '완료');
+    expect(done.snapshot.scenes[0].text).toBe('매장에 우유가 부족한지');
+    expect(done.snapshot.title).toBe('재고 관리 사용법');
+    expect(a.renderer.calls[0]!.scenes[0]!.text).toBe(done.snapshot.scenes[0].text);
+  });
+});
+
 describe('작업의 프로젝트 소속 검증', () => {
   it('프로젝트 경로로 조회하면 그 프로젝트의 작업만 돌려주고, 다른 프로젝트의 작업 ID 는 404 다', async () => {
     const a = await setup();

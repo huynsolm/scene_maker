@@ -6,6 +6,7 @@ import {
   SCENE_COUNT,
 } from '../shared/limits';
 import type { SaveProjectInput } from '../shared/schemas';
+import { cleanText, cleanTitle } from '../shared/text';
 import type { Project, ProjectStatus, ProjectSummary, Scene } from '../shared/types';
 import type { Db } from './db';
 import { AppError, notFound } from './errors';
@@ -95,7 +96,8 @@ export class Store {
           `INSERT INTO projects (id, title, status, is_sample, created_at, updated_at)
            VALUES (?, ?, 'editing', ?, ?, ?)`,
         )
-        .run(id, opts.title ?? '', opts.isSample ? 1 : 0, now, now);
+        // 저장 불변식(shared/text.ts)은 API 스키마뿐 아니라 쓰는 곳에서도 보장한다(스크립트·내부 호출이 우회하지 못하게). 정리는 멱등이다.
+        .run(id, cleanTitle(opts.title ?? ''), opts.isSample ? 1 : 0, now, now);
       const ins = this.db.prepare(
         `INSERT INTO scenes (project_id, position, text, duration_sec) VALUES (?, ?, '', ?)`,
       );
@@ -161,8 +163,8 @@ export class Store {
       const upd = this.db.prepare(
         `UPDATE scenes SET text = ?, duration_sec = ? WHERE project_id = ? AND position = ?`,
       );
-      input.scenes.forEach((s, i) => upd.run(s.text, s.durationSec, id, i));
-      this.db.prepare(`UPDATE projects SET title = ? WHERE id = ?`).run(input.title, id);
+      input.scenes.forEach((s, i) => upd.run(cleanText(s.text), s.durationSec, id, i));
+      this.db.prepare(`UPDATE projects SET title = ? WHERE id = ?`).run(cleanTitle(input.title), id);
       this.touch(id);
     });
     tx();
