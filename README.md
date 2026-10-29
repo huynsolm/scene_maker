@@ -40,8 +40,8 @@ npm run seed:sample
 ## 테스트
 ```bash
 npm run typecheck
-npm test                # 단위·API·실제 ffmpeg 테스트 95개 (Vitest). ffmpeg 가 없으면 ffmpeg 테스트는 건너뜀
-npm run build && npm run test:e2e   # 브라우저 E2E 31개 (Playwright). 먼저 build 필요. 전체 흐름·결과 화면·미리보기↔영상 자막 일치 포함
+npm test                # 단위·API·실제 ffmpeg 테스트 100개 (Vitest). ffmpeg 가 없으면 ffmpeg 테스트는 건너뜀
+npm run build && npm run test:e2e   # 브라우저 E2E 34개 (Playwright). 먼저 build 필요. 전체 흐름·결과 화면·미리보기↔영상 자막 일치 포함
 npm run build && npm run compare:frame -- --out report.md   # 미리보기↔영상 자막 차이 측정
 ```
 E2E 와 비교 스크립트는 Chromium 이 필요하다. 처음이면 `npx playwright install chromium`.
