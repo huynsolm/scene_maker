@@ -189,6 +189,75 @@ describe('1단계 화면 흐름', () => {
     await page.close();
   });
 
+  it('붙여넣기: 꽉 찬 제목의 기존 뒷글자는 지워지지 않고, 커서는 삽입 끝에 놓인다', async () => {
+    const page = await env.newPage();
+    await newProject(page);
+    const paste = (selector: string, start: number, end: number, text: string) =>
+      page.evaluate(
+        ([sel, st, en, t]) => {
+          const el = document.querySelector(sel as string) as HTMLInputElement | HTMLTextAreaElement;
+          el.focus();
+          el.setSelectionRange(st as number, en as number);
+          const data = new DataTransfer();
+          data.setData('text', t as string);
+          el.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+        },
+        [selector, start, end, text] as const,
+      );
+    // 1) 제목이 가득(100자)일 때 맨 앞에 붙여 넣어도 기존 글(Z)은 그대로
+    await page.getByLabel('영상 제목').fill('A'.repeat(99) + 'Z');
+    await paste('.title-input', 0, 0, '\u200BX');
+    await new Promise((r) => setTimeout(r, 200));
+    expect(await page.getByLabel('영상 제목').inputValue()).toBe('A'.repeat(99) + 'Z');
+    // 2) 남은 자리만큼만 들어간다
+    await page.getByLabel('영상 제목').fill('A'.repeat(90));
+    await paste('.title-input', 0, 0, '\u200B' + 'X'.repeat(20));
+    await eventually(async () => (await page.getByLabel('영상 제목').inputValue()) === 'X'.repeat(10) + 'A'.repeat(90), '남은 10자리만 삽입');
+    // 3) 앞부분에 보이지 않는 문자가 있어도 커서는 삽입한 글 바로 뒤
+    await page.locator('#scene-text').fill('\u200BABC');
+    await paste('#scene-text', 2, 2, '\u200BX'); // 원문에서 A 바로 뒤
+    await eventually(async () => (await page.locator('#scene-text').inputValue()) === 'AXBC', 'AXBC');
+    await eventually(async () => (await page.locator('#scene-text').evaluate((el) => (el as HTMLTextAreaElement).selectionStart)) === 2, '커서는 X 뒤(2)');
+    await page.close();
+  });
+
+  it('IME 조합 중에 받은 정리 응답은 조합이 끝난 뒤 반영되고, 그 사이 더 입력했다면 오래된 응답으로 덮어쓰지 않는다', async () => {
+    const page = await env.newPage();
+    await newProject(page);
+    const box = page.locator('#scene-text');
+    const fire = (type: string) => box.evaluate((el, t) => el.dispatchEvent(new CompositionEvent(t, { bubbles: true })), type);
+
+    // A) 조합 중 저장 응답이 도착해도 값은 바뀌지 않고(조합 보호), 조합이 끝나면 정리된 값으로 맞춰진다
+    await box.focus();
+    await fire('compositionstart');
+    await box.fill('매\u200B장');
+    await eventually(hasText(page, '[data-testid=save-state]', '저장됨'), '조합 중에도 저장됨');
+    await new Promise((r) => setTimeout(r, 400));
+    expect(await box.inputValue()).toBe('매\u200B장'); // 조합 중이라 아직 그대로
+    await fire('compositionend'); // 이후 추가 입력(onChange)이 없다
+    await eventually(async () => (await box.inputValue()) === '매장', '조합 종료 후 정리된 값으로 맞춰짐');
+    expect(await page.locator('[data-testid=save-state]').innerText()).toContain('저장됨');
+
+    // B) 조합이 끝나는 순간 마지막 입력이 이어지면(브라우저에 따라 순서가 다르다) 보관한 응답은 오래된 것이므로 버린다
+    await box.focus();
+    await fire('compositionstart');
+    await box.fill('가\u200B나');
+    await eventually(async () => (await page.locator('[data-testid=save-state]').innerText()).includes('저장됨'), '저장됨(응답 보관)');
+    await new Promise((r) => setTimeout(r, 300));
+    // compositionend 와 마지막 input 이 **같은 틱**에 연달아 온다(별도 evaluate 로 보내면 그 사이에 타이머가 먼저 돌아 경쟁이 생기지 않는다)
+    await box.evaluate((el) => {
+      el.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }));
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!;
+      setter.call(el, '가\u200B나\u200B다');
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await eventually(async () => (await box.inputValue()) === '가나다', '최신 입력을 지우지 않고 정리된 값으로 수렴');
+    await eventually(hasText(page, '[data-testid=save-state]', '저장됨'), '저장됨');
+    const id = page.url().split('/').pop()!;
+    expect(((await (await fetch(`${env.base}/api/projects/${id}`)).json()) as any).project.scenes[0].text).toBe('가나다');
+    await page.close();
+  });
+
   it('이미지 업로드: 올리면 미리보기에 나오고, 새로고침 후에도 남고, 삭제하면 비어 있는 상태로 돌아간다', async () => {
     const page = await env.newPage();
     await newProject(page);

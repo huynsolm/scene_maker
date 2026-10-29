@@ -13,7 +13,8 @@ import {
   TEXT_RECOMMENDED_LENGTH,
   VIDEO,
 } from '../../shared/limits';
-import { cleanText, cleanTitle, truncateUtf16 } from '../../shared/text';
+import { cleanText, cleanTitle } from '../../shared/text';
+import { pasteInto } from '../paste';
 import type { Project } from '../../shared/types';
 import { ApiFailure, api } from '../api';
 import { CenterMessage, SampleTag } from '../components';
@@ -566,10 +567,9 @@ function DurationControl({ value, onChange }: { value: number; onChange: (v: num
 }
 
 /**
- * 붙여 넣는 글을 저장 때와 같은 규칙(shared/text.ts)으로 정리한다. 정리가 필요 없으면 브라우저 기본 동작(되돌리기 기록 유지)에 맡긴다.
- * 복사해 온 글에는 분해된 한글 자모(NFD, macOS)나 보이지 않는 문자(제로폭 공백 등)가 섞여 있을 수 있고, 그대로 붙이면
- * 글자 수 한도(maxLength)를 일찍 채워 뒤가 잘린다. 절단은 서로게이트 쌍(이모지)을 쪼개지 않게 한다.
- * 입력 중 IME 조합에는 개입하지 않는다(paste 이벤트에서만 동작).
+ * 붙여 넣는 글을 저장 때와 같은 규칙(shared/text.ts)으로 정리한다(`pasteInto`, web/paste.ts). 정리가 필요 없으면 브라우저 기본 동작
+ * (되돌리기 기록 유지)에 맡긴다. 복사해 온 글에는 분해된 한글 자모(NFD, macOS)나 보이지 않는 문자(제로폭 공백 등)가 섞여 있을 수 있고,
+ * 그대로 붙이면 글자 수 한도(maxLength)를 일찍 채워 뒤가 잘린다. 입력 중 IME 조합에는 개입하지 않는다(paste 이벤트에서만 동작).
  */
 function pasteCleaned(
   e: ClipboardEvent<HTMLInputElement | HTMLTextAreaElement>,
@@ -577,15 +577,11 @@ function pasteCleaned(
   max: number,
   apply: (value: string) => void,
 ) {
-  const raw = e.clipboardData.getData('text');
-  const cleaned = clean(raw);
-  if (cleaned === raw) return;
-  e.preventDefault();
   const el = e.currentTarget;
   const start = el.selectionStart ?? el.value.length;
-  const end = el.selectionEnd ?? start;
-  const next = truncateUtf16(clean(el.value.slice(0, start) + cleaned + el.value.slice(end)), max);
-  apply(next);
-  const caret = Math.min(start + cleaned.length, next.length);
-  requestAnimationFrame(() => el.setSelectionRange(caret, caret));
+  const result = pasteInto({ value: el.value, start, end: el.selectionEnd ?? start, pasted: e.clipboardData.getData('text'), clean, max });
+  if (!result) return;
+  e.preventDefault();
+  apply(result.next);
+  requestAnimationFrame(() => el.setSelectionRange(result.caret, result.caret));
 }

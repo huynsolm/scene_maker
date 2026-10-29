@@ -38,6 +38,8 @@ export function useProjectEditor(id: string, onToast: (msg: string) => void) {
   const saveFailedRef = useRef(false);
   // IME 조합 중에는 입력칸의 값을 바꾸면 조합이 깨지므로 서버가 정리한 값의 반영을 미룬다(다음 저장 때 반영).
   const composing = useRef(false);
+  // 조합 중에 도착해 반영하지 못한 서버 응답(정리된 값)과 그 응답이 대응하는 편집 버전. 조합이 끝나면 아직 최신일 때만 반영한다.
+  const pendingSync = useRef<{ version: number; body: SaveBody } | null>(null);
 
   const load = useCallback(async () => {
     setLoadState('loading');
@@ -75,6 +77,14 @@ export function useProjectEditor(id: string, onToast: (msg: string) => void) {
     };
   }, [id, load]);
 
+  /** 서버가 정리해 돌려준 값으로 draft 를 맞춘다(같으면 아무것도 하지 않는다). version 은 올리지 않는다. */
+  const applyServerBody = useCallback((saved: SaveBody) => {
+    if (draftRef.current && !sameBody(saved, draftRef.current)) {
+      draftRef.current = saved;
+      setDraft(saved);
+    }
+  }, []);
+
   /** draft 를 서버로 한 번 보낸다. 성공하면 true. */
   const send = useCallback(async (): Promise<boolean> => {
     const body = draftRef.current!;
@@ -92,11 +102,13 @@ export function useProjectEditor(id: string, onToast: (msg: string) => void) {
         setSavedAt(hm(new Date()));
         // 서버는 저장할 때 문구·제목을 정리한다(NFC, 보이지 않는 문자 제거 — shared/text.ts). 붙여넣기가 아닌 입력(드래그 앤 드롭 등)으로
         // 들어온 보이지 않는 문자가 화면에는 남고 저장값에서는 사라져 "저장됨"인데 둘이 다른 상태가 되지 않도록,
-        // 그 사이 더 고친 것이 없고 조합 중이 아닐 때 정리된 값으로 draft 를 맞춘다(version 은 올리지 않으므로 다시 저장하지 않는다).
+        // 그 사이 더 고친 것이 없으면 정리된 값으로 draft 를 맞춘다(version 은 올리지 않으므로 다시 저장하지 않는다).
+        // IME 조합 중에는 입력칸의 값을 바꾸면 조합이 깨지므로 응답을 보관했다가 조합이 끝난 뒤 반영한다(setComposing).
         const saved: SaveBody = { title: p.title, scenes: p.scenes.map((s) => ({ text: s.text, durationSec: s.durationSec })) };
-        if (!composing.current && draftRef.current && !sameBody(saved, draftRef.current)) {
-          draftRef.current = saved;
-          setDraft(saved);
+        if (composing.current) pendingSync.current = { version: sentVersion, body: saved };
+        else {
+          pendingSync.current = null;
+          applyServerBody(saved);
         }
       }
       return true;
@@ -108,7 +120,7 @@ export function useProjectEditor(id: string, onToast: (msg: string) => void) {
       }
       return false;
     }
-  }, [id]);
+  }, [id, applyServerBody]);
 
   /**
    * 서버 내용이 draft 와 같아질 때까지 저장한다. 한 번에 하나만 전송하고, 보내는 동안 더 고쳐졌다면
@@ -215,6 +227,15 @@ export function useProjectEditor(id: string, onToast: (msg: string) => void) {
     setTitle, setText, setDuration, retrySave, saveNow, uploadImage, removeImage,
     setComposing: (v: boolean) => {
       composing.current = v;
+      if (v) return;
+      // 조합이 끝났다. 브라우저에 따라 마지막 input 이벤트가 compositionend 직후에 올 수 있으므로 한 틱 뒤에 확인한다.
+      // 그 사이 더 고쳤다면(version 이 달라졌다면) 오래된 응답으로 덮어쓰지 않고 버린다 — 이어지는 저장이 최신 내용을 다시 보낸다.
+      setTimeout(() => {
+        const p = pendingSync.current;
+        if (!p || composing.current || !alive.current) return;
+        pendingSync.current = null;
+        if (version.current === p.version) applyServerBody(p.body);
+      }, 0);
     },
     hasUnsaved: () => version.current !== savedVersion.current,
   };
