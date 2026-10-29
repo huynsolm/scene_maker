@@ -57,4 +57,42 @@ describe('pasteInto(붙여넣기 정리)', () => {
     expect(r.next).toBe('매장');
     expect(r.caret).toBe(2);
   });
+  it('경계에서 NFC 재조합이 길이를 늘려도 한도를 넘지 않고 기존 글을 보존한다(검수 반례)', () => {
+    const value = 'A'.repeat(98) + 'Ǻ'; // 99칸
+    const r = pasteInto({ value, start: 99, end: 99, pasted: '​̣', clean: cleanTitle, max: 100 })!;
+    expect(r.next.length).toBeLessThanOrEqual(100);
+    expect(r.next).toBe(value); // 들어갈 수 있는 삽입분이 없으면 기존 값 그대로
+    expect(r.caret).toBe(99);
+    // 문구 200칸 경계에서도 같다
+    const text = 'A'.repeat(198) + 'Ǻ';
+    const t = pasteInto({ value: text, start: 199, end: 199, pasted: '​̣', clean: cleanText, max: 200 })!;
+    expect(t.next.length).toBeLessThanOrEqual(200);
+    expect(t.next.startsWith('A'.repeat(198))).toBe(true);
+  });
+
+  it('재조합으로 늘어나는 만큼 삽입분을 줄여 맞춘다', () => {
+    const value = 'A'.repeat(97) + 'Ǻ'; // 98칸, 두 칸 남음
+    const r = pasteInto({ value, start: 98, end: 98, pasted: '​̣x', clean: cleanTitle, max: 100 })!;
+    expect(r.next.length).toBeLessThanOrEqual(100);
+    expect(r.next.startsWith('A'.repeat(97))).toBe(true);
+    expect(r.caret).toBeLessThanOrEqual(r.next.length);
+  });
+  it('무작위 값·선택·붙여넣기에서도 결과는 항상 한도 이내다(결합 문자·자모·보이지 않는 문자 섞음)', () => {
+    const alpha = ['A', 'Ǻ', '̣', '̊', '́', 'ᄀ', 'ᅡ', 'ᆨ', '​', '가', '😀', 'x'];
+    let seed = 12345;
+    const rnd = (n: number) => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) % n);
+    const gen = (len: number) => Array.from({ length: len }, () => alpha[rnd(alpha.length)]).join('');
+    for (let i = 0; i < 20000; i++) {
+      const max = 4 + rnd(8);
+      let value = cleanTitle(gen(rnd(max + 1)));
+      if (value.length > max) value = value.slice(0, max);
+      const a = rnd(value.length + 1);
+      const b = a + rnd(value.length - a + 1);
+      const r = pasteInto({ value, start: a, end: b, pasted: gen(1 + rnd(6)), clean: cleanTitle, max });
+      if (!r) continue;
+      expect(r.next.length).toBeLessThanOrEqual(Math.max(max, value.length));
+      expect(r.caret).toBeLessThanOrEqual(r.next.length);
+      expect(cleanTitle(r.next)).toBe(r.next);
+    }
+  });
 });

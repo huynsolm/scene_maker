@@ -27,8 +27,19 @@ export function pasteInto(opts: {
   if (cleaned === pasted) return null;
   const prefix = clean(value.slice(0, start));
   const suffix = clean(value.slice(end));
-  const inserted = truncateUtf16(cleaned, Math.max(0, max - prefix.length - suffix.length));
-  const next = clean(prefix + inserted + suffix); // 경계에서 자모가 합쳐질 수 있어 한 번 더 정리(길이는 늘지 않는다)
-  const caret = Math.min(clean(prefix + inserted).length, next.length);
-  return { next, caret };
+  // 길이 계산은 정리 전 조각의 합이 아니라 **합친 뒤의 정리 결과**로 확인한다. 경계에서 NFC 가 재조합·재정렬하면
+  // 합친 결과가 조각의 합보다 길어질 수 있다(예: 'Ǻ' + U+0323 → 3칸). 넘치면 삽입분을 한 칸씩 줄여 다시 계산한다.
+  let budget = Math.max(0, max - prefix.length - suffix.length);
+  for (;;) {
+    const inserted = truncateUtf16(cleaned, budget);
+    const next = clean(prefix + inserted + suffix);
+    if (next.length <= max) {
+      const caret = Math.min(clean(prefix + inserted).length, next.length);
+      return { next, caret };
+    }
+    if (budget === 0) break;
+    budget -= 1;
+  }
+  // 삽입분이 없어도 앞·뒤가 맞붙으며 한도를 넘는 경우: 기존 값을 그대로 둔다.
+  return { next: value, caret: Math.min(start, value.length) };
 }
