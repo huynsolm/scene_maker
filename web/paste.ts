@@ -24,12 +24,16 @@ export function pasteInto(opts: {
 }): PasteResult | null {
   const { value, start, end, pasted, clean, max } = opts;
   const cleaned = clean(pasted);
-  if (cleaned === pasted) return null;
+  // 붙여 넣을 조각이 이미 정리돼 있어도 **합친 뒤**에는 달라질 수 있다(NFC 재조합으로 길이가 늘어 한도를 넘는 경우).
+  // 브라우저 기본 동작으로 넣은 결과가 정리해도 그대로이고 한도 이내일 때만 개입하지 않는다.
+  const native = value.slice(0, start) + pasted + value.slice(end);
+  if (cleaned === pasted && native.length <= max && clean(native) === native) return null;
   const prefix = clean(value.slice(0, start));
   const suffix = clean(value.slice(end));
-  // 길이 계산은 정리 전 조각의 합이 아니라 **합친 뒤의 정리 결과**로 확인한다. 경계에서 NFC 가 재조합·재정렬하면
-  // 합친 결과가 조각의 합보다 길어질 수 있다(예: 'Ǻ' + U+0323 → 3칸). 넘치면 삽입분을 한 칸씩 줄여 다시 계산한다.
-  let budget = Math.max(0, max - prefix.length - suffix.length);
+  // 길이는 조각의 합이 아니라 **합친 뒤의 정리 결과**로 확인한다. 경계에서 NFC 가 재조합·재정렬하면 조각의 합보다
+  // 길어지거나(예: 'Ǻ' + U+0323 → 3칸) 짧아질 수 있다(예: 'ᄀ' + 'ᅡ' → 1칸). 정리 후 들어가는 가장 긴 삽입분을 찾기 위해
+  // 후보 전체(자모 3개가 1글자로 합쳐지는 경우까지 고려해 max 의 4배로 상한)에서 한 칸씩 줄여 가며 확인한다.
+  let budget = Math.min(cleaned.length, max * 4);
   for (;;) {
     const inserted = truncateUtf16(cleaned, budget);
     const next = clean(prefix + inserted + suffix);

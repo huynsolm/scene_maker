@@ -189,6 +189,17 @@ describe('1단계 화면 흐름', () => {
     await page.close();
   });
 
+  it('붙여넣기가 아닌 입력으로 원문 100칸이지만 정리하면 101칸인 제목도 저장이 거절되지 않고 한도에 맞춰진다', async () => {
+    const page = await env.newPage();
+    await newProject(page);
+    const raw = 'A'.repeat(98) + '\u01FA' + '\u0323'; // maxLength 는 통과하지만 NFC 로 101칸
+    await page.getByLabel('영상 제목').fill(raw);
+    await eventually(hasText(page, '[data-testid=save-state]', '저장됨'), '저장됨(거절되지 않음)');
+    await eventually(async () => (await page.getByLabel('영상 제목').inputValue()).length <= 100, '제목이 한도 이내로 맞춰짐');
+    expect((await page.getByLabel('영상 제목').inputValue()).startsWith('A'.repeat(98))).toBe(true);
+    await page.close();
+  });
+
   it('붙여넣기: 꽉 찬 제목의 기존 뒷글자는 지워지지 않고, 커서는 삽입 끝에 놓인다', async () => {
     const page = await env.newPage();
     await newProject(page);

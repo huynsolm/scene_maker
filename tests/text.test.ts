@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cleanText, cleanTitle, truncateUtf16 } from '../shared/text';
+import { cleanText, cleanTitle, fitCleaned, truncateUtf16 } from '../shared/text';
 
 describe('cleanText (저장 경계·붙여넣기·영상 파이프라인이 함께 쓰는 정리)', () => {
   it('NFC 로 합친다', () => {
@@ -85,5 +85,24 @@ describe('멱등성: cleanText(cleanText(x)) === cleanText(x), 결과는 항상 
       const t = cleanTitle(x);
       expect(cleanTitle(t), JSON.stringify(x)).toBe(t);
     }
+  });
+});
+
+describe('fitCleaned (저장 전송 직전 정리 후 길이 맞춤)', () => {
+  it('정리하면 한도를 넘는 값(검수 반례)을 한도 이내로 줄이고 결과는 정리된 값이다', () => {
+    const raw = 'A'.repeat(98) + 'Ǻ' + '̣'; // 원문 100칸, NFC 101칸
+    expect(raw.length).toBe(100);
+    const out = fitCleaned(raw, cleanTitle, 100);
+    expect(out.length).toBeLessThanOrEqual(100);
+    expect(cleanTitle(out)).toBe(out);
+    expect(out.startsWith('A'.repeat(98))).toBe(true);
+  });
+  it('한도 이내면 정리만 한다', () => {
+    expect(fitCleaned('가​나', cleanText, 200)).toBe('가나');
+  });
+  it('이모지를 쪼개지 않는다', () => {
+    const out = fitCleaned('a'.repeat(199) + '😀', cleanText, 200);
+    expect(out.isWellFormed()).toBe(true);
+    expect(out.length).toBeLessThanOrEqual(200);
   });
 });

@@ -42,3 +42,14 @@ export function truncateUtf16(text: string, max: number): string {
   if (last >= 0xd800 && last <= 0xdbff) end -= 1; // 상위 서로게이트만 남는 경우
   return text.slice(0, end);
 }
+
+/**
+ * 정리한 뒤 길이가 `max` 이내가 되도록 끝을 잘라 돌려준다(항상 정리된 값, 서로게이트 쌍은 쪼개지 않음).
+ * 서버 스키마는 정리 후 길이를 검사하므로, 화면의 원문이 `maxLength` 안이어도 정리하면(NFC 재조합 등) 한도를 넘는 값은
+ * 저장이 거절된다. 저장을 보내기 전에 이 함수로 맞춘다.
+ */
+export function fitCleaned(text: string, clean: (s: string) => string, max: number): string {
+  let out = clean(text);
+  while (out.length > max) out = clean(truncateUtf16(out, Math.min(max, out.length - 1)));
+  return out;
+}

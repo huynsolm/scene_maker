@@ -3,11 +3,19 @@ import type { Project } from '../shared/types';
 import { ApiFailure, api, type SaveBody } from './api';
 import { hm } from './format';
 import { precheckImage } from './rules';
+import { fitCleaned, cleanText, cleanTitle } from '../shared/text';
+import { TEXT_MAX_LENGTH, TITLE_MAX_LENGTH } from '../shared/limits';
 
 export type SaveState = 'saved' | 'saving' | 'failed';
 export type LoadState = 'loading' | 'ready' | 'notfound' | 'error';
 
 const DEBOUNCE_MS = 900;
+
+/** 보낼 본문. 서버 스키마와 같은 규칙으로 정리하고 정리 후 길이를 한도에 맞춘다(안 맞추면 저장이 거절된다). */
+const toSendBody = (b: SaveBody): SaveBody => ({
+  title: fitCleaned(b.title, cleanTitle, TITLE_MAX_LENGTH),
+  scenes: b.scenes.map((s) => ({ ...s, text: fitCleaned(s.text, cleanText, TEXT_MAX_LENGTH) })),
+});
 
 const sameBody = (a: SaveBody, b: SaveBody) =>
   a.title === b.title && a.scenes.length === b.scenes.length && a.scenes.every((s, i) => s.text === b.scenes[i]!.text && s.durationSec === b.scenes[i]!.durationSec);
@@ -72,7 +80,7 @@ export function useProjectEditor(id: string, onToast: (msg: string) => void) {
       clearTimeout(timer.current);
       // 화면을 떠날 때 아직 못 보낸 변경이 있으면 한 번 더 시도한다(결과는 기다리지 않는다).
       if (draftRef.current && version.current !== savedVersion.current && !inFlight.current) {
-        void api.saveProject(id, draftRef.current).catch(() => undefined);
+        void api.saveProject(id, toSendBody(draftRef.current)).catch(() => undefined);
       }
     };
   }, [id, load]);
@@ -87,7 +95,7 @@ export function useProjectEditor(id: string, onToast: (msg: string) => void) {
 
   /** draft 를 서버로 한 번 보낸다. 성공하면 true. */
   const send = useCallback(async (): Promise<boolean> => {
-    const body = draftRef.current!;
+    const body = toSendBody(draftRef.current!);
     const sentVersion = version.current;
     setSave('saving');
     try {

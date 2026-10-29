@@ -95,4 +95,22 @@ describe('pasteInto(붙여넣기 정리)', () => {
       expect(cleanTitle(r.next)).toBe(r.next);
     }
   });
+  it('붙여넣을 조각이 이미 정리돼 있어도 합친 뒤 한도를 넘으면 개입한다(검수 반례: 제로폭 문자 없이 U+0323 만)', () => {
+    const value = 'A'.repeat(98) + 'Ǻ';
+    const r = pasteInto({ value, start: 99, end: 99, pasted: '̣', clean: cleanTitle, max: 100 });
+    expect(r).not.toBeNull();
+    expect(r!.next.length).toBeLessThanOrEqual(100);
+    expect(r!.next).toBe(value);
+  });
+
+  it('정리할 것도 없고 합쳐도 그대로이며 한도 이내면 브라우저 기본 동작에 맡긴다', () => {
+    expect(pasteInto({ value: 'abc', start: 1, end: 1, pasted: 'XY', clean: cleanTitle, max: 100 })).toBeNull();
+  });
+
+  it('정리 후 들어가는 가장 긴 삽입분을 넣는다(검수 반례: 자모 합쳐짐, 이모지)', () => {
+    const a = pasteInto({ value: 'ᄀ', start: 1, end: 1, pasted: '​ᅡX', clean: cleanText, max: 2 })!;
+    expect(a.next).toBe('가X');
+    const b = pasteInto({ value: 'ᄀ', start: 1, end: 1, pasted: '​ᅡ😀', clean: cleanText, max: 3 })!;
+    expect(b.next).toBe('가😀');
+  });
 });
