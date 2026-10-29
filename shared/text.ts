@@ -16,9 +16,14 @@
 // eslint-disable-next-line no-control-regex
 const INVISIBLE_OR_CONTROL = /[\u0000-\u0008\u000B-\u001F\u007F-\u009F­​-‏‪-‮⁠-⁤⁦-⁩︀-️﻿]/g;
 
-/** 문구: NFC, 줄바꿈은 \n 으로 통일, 보이지 않는 문자·제어 문자 제거(\n 과 탭은 유지) */
+/**
+ * 문구: 줄바꿈은 \n 으로 통일, 보이지 않는 문자·제어 문자 제거(\n 과 탭은 유지), **마지막에** NFC.
+ * 순서가 중요하다. 보이지 않는 문자가 사이에 끼어 있던 자모(`\u1100\u200B\u1161`)는 제거한 뒤에야 서로 붙으므로,
+ * NFC 를 먼저 하면 한 번 더 정리해야 합쳐진다(반환값이 NFC 가 아니고 정리가 멱등이 아니게 됨).
+ * 마지막에 NFC 를 하면 반환값이 항상 NFC 이므로 `cleanText(cleanText(x)) === cleanText(x)` 이다.
+ */
 export function cleanText(text: string): string {
-  return text.normalize('NFC').replace(/\r\n?/g, '\n').replace(INVISIBLE_OR_CONTROL, '');
+  return text.replace(/\r\n?/g, '\n').replace(INVISIBLE_OR_CONTROL, '').normalize('NFC');
 }
 
 /** 제목: 한 줄이다. 줄바꿈과 탭은 공백으로 바꾼다. */

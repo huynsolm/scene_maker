@@ -53,3 +53,37 @@ describe('truncateUtf16', () => {
     expect(keep.isWellFormed()).toBe(true);
   });
 });
+
+describe('멱등성: cleanText(cleanText(x)) === cleanText(x), 결과는 항상 NFC', () => {
+  it('보이지 않는 문자로 떨어져 있던 한글 자모는 제거한 뒤에 합쳐진다(검수 반례)', () => {
+    const x = '\u1100\u200B\u1161';
+    expect(cleanText(x)).toBe('가'); // 첫 호출에서 이미 합쳐진다(1칸)
+    expect(cleanText(cleanText(x))).toBe(cleanText(x));
+    expect(cleanText('\u1100\u200B\u1161\u200B\u11A8')).toBe('각');
+    expect(cleanText('e\u200B\u0301')).toBe('é'); // 라틴 결합 문자도 같다
+    expect(cleanTitle('\u1100\u200B\u1161')).toBe('가');
+  });
+
+  it('이런 입력 200개는 정리 후 200자이므로 길이 한도를 넘지 않는다', () => {
+    const text = '\u1100\u200B\u1161'.repeat(200);
+    expect(cleanText(text)).toBe('가'.repeat(200));
+    expect(cleanText(text).length).toBe(200);
+  });
+
+  it('무작위 조합 3만 개(고정 시드)에서도 멱등이고 항상 NFC 이며 제거 대상이 남지 않는다', () => {
+    const alphabet = ['\u1100', '\u1161', '\u11A8', '가', '각', 'a', 'e', '\u0301', '\u0308', '\u200B', '\u200D', '\uFEFF', '\u00AD', '\uFE0F', '\r', '\n', '\t', ' ', '\u0007', '😀', '한', '\u1112', '\u1161', '\u11AB', '\u202E', '\u2060'];
+    let seed = 20261029;
+    const rnd = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 2 ** 32);
+    for (let i = 0; i < 30000; i++) {
+      const len = Math.floor(rnd() * 13);
+      let x = '';
+      for (let k = 0; k < len; k++) x += alphabet[Math.floor(rnd() * alphabet.length)]!;
+      const a = cleanText(x);
+      expect(cleanText(a), JSON.stringify(x)).toBe(a);
+      expect(a, JSON.stringify(x)).toBe(a.normalize('NFC'));
+      expect(a, JSON.stringify(x)).not.toMatch(/[\u0000-\u0008\u000B-\u001F\u007F-\u009F\u00AD\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFE00-\uFE0F\uFEFF]/);
+      const t = cleanTitle(x);
+      expect(cleanTitle(t), JSON.stringify(x)).toBe(t);
+    }
+  });
+});
