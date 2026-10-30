@@ -105,4 +105,9 @@ describe('fitCleaned (저장 전송 직전 정리 후 길이 맞춤)', () => {
     expect(out.isWellFormed()).toBe(true);
     expect(out.length).toBeLessThanOrEqual(200);
   });
+  it('멱등이 아닌 clean 콜백이어도 반드시 끝난다(검수 반례)', () => {
+    const out = fitCleaned('aaaa', (x) => x + 'x', 2);
+    expect(out.length).toBeLessThanOrEqual(2);
+    expect(fitCleaned('abc', (x) => x + 'xxxx', 2)).toBe('');
+  });
 });

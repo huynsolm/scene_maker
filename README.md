@@ -40,7 +40,7 @@ npm run seed:sample
 ## 테스트
 ```bash
 npm run typecheck
-npm test                # 단위·API·실제 ffmpeg 테스트 120개 (Vitest). ffmpeg 가 없으면 ffmpeg 테스트는 건너뜀
+npm test                # 단위·API·실제 ffmpeg 테스트 121개 (Vitest). ffmpeg 가 없으면 ffmpeg 테스트는 건너뜀
 npm run build && npm run test:e2e   # 브라우저 E2E 37개 (Playwright). 먼저 build 필요. 전체 흐름·결과 화면·미리보기↔영상 자막 일치 포함
 npm run build && npm run compare:frame -- --out report.md   # 미리보기↔영상 자막 차이 측정
 ```

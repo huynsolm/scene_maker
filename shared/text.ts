@@ -49,7 +49,13 @@ export function truncateUtf16(text: string, max: number): string {
  * 저장이 거절된다. 저장을 보내기 전에 이 함수로 맞춘다.
  */
 export function fitCleaned(text: string, clean: (s: string) => string, max: number): string {
-  let out = clean(text);
-  while (out.length > max) out = clean(truncateUtf16(out, Math.min(max, out.length - 1)));
-  return out;
+  const out = clean(text);
+  if (out.length <= max) return out;
+  // 절단 위치를 독립적으로 1씩 줄이는 유한 반복이다. `clean` 이 멱등이 아니어도 반드시 끝나고, 0 까지 내려가면 빈 문자열을 돌려준다.
+  for (let cut = Math.min(max, out.length - 1); cut > 0; cut -= 1) {
+    const candidate = clean(truncateUtf16(out, cut));
+    if (candidate.length <= max) return candidate;
+  }
+  const empty = clean('');
+  return empty.length <= max ? empty : '';
 }
