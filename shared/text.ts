@@ -44,9 +44,13 @@ export function truncateUtf16(text: string, max: number): string {
 }
 
 /**
- * 정리한 뒤 길이가 `max` 이내가 되도록 끝을 잘라 돌려준다(항상 정리된 값, 서로게이트 쌍은 쪼개지 않음).
+ * 정리한 뒤 길이가 `max` 이내가 되도록 끝을 잘라 돌려준다.
  * 서버 스키마는 정리 후 길이를 검사하므로, 화면의 원문이 `maxLength` 안이어도 정리하면(NFC 재조합 등) 한도를 넘는 값은
  * 저장이 거절된다. 저장을 보내기 전에 이 함수로 맞춘다.
+ *
+ * 보장 범위: `clean` 이 `cleanText`/`cleanTitle` 처럼 멱등이고 올바른 UTF-16 을 돌려줄 때, 결과는 정리된 값이고 길이는 `max`
+ * 이내이며 서로게이트 쌍을 쪼개지 않는다. 반복은 절단 위치를 1씩 줄이는 유한 반복이라 `clean` 이 반환하기만 하면 임의의
+ * 콜백에서도 종료하지만, 비멱등 콜백의 결과가 정리된 값이라는 것까지는 보장하지 않는다.
  */
 export function fitCleaned(text: string, clean: (s: string) => string, max: number): string {
   const out = clean(text);
