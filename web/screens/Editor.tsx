@@ -1,6 +1,8 @@
-import { useEffect, useRef, useState, type DragEvent } from 'react';
+import { useEffect, useRef, useState, type ClipboardEvent, type DragEvent } from 'react';
 import {
   DEFAULT_TOTAL_SEC,
+  TEXT_MAX_LENGTH,
+  TITLE_MAX_LENGTH,
   DURATION_MAX_SEC,
   DURATION_MIN_SEC,
   DURATION_QUICK_PICKS,
@@ -11,7 +13,10 @@ import {
   TEXT_RECOMMENDED_LENGTH,
   VIDEO,
 } from '../../shared/limits';
+import { cleanText, cleanTitle } from '../../shared/text';
+import { pasteInto } from '../paste';
 import type { Project } from '../../shared/types';
+import { ApiFailure, api } from '../api';
 import { CenterMessage, SampleTag } from '../components';
 import { isBusy, mmss } from '../format';
 import { Link, navigate } from '../router';
@@ -23,12 +28,23 @@ import { ConfirmModal } from './ConfirmModal';
 export function Editor({ projectId }: { projectId: string }) {
   const toast = useToast();
   const ed = useProjectEditor(projectId, toast.show);
-  const [sel, setSel] = useState(0);
+  // 결과 화면의 "장면 N 편집에서 확인하기" 같은 링크(?scene=N)로 들어오면 그 장면을 먼저 보여준다.
+  const [sel, setSel] = useState(() => {
+    const n = Number(new URLSearchParams(window.location.search).get('scene'));
+    return Number.isInteger(n) && n >= 1 && n <= SCENE_COUNT ? n - 1 : 0;
+  });
   const [guides, setGuides] = useState(true);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [starting, setStarting] = useState(false);
+  const startingRef = useRef(false); // state 는 같은 틱의 두 번째 클릭에는 아직 갱신되지 않아서 ref 로 동기 차단한다
   const fileRef = useRef<HTMLInputElement>(null);
   const titleRef = useRef<HTMLInputElement>(null);
   const textRef = useRef<HTMLTextAreaElement>(null);
+
+  // 자막 글꼴(약 0.5MB)을 화면에 들어올 때 미리 받아 둔다(자막이 처음 그려질 때의 글꼴 깜빡임을 줄인다).
+  useEffect(() => {
+    void document.fonts?.load("600 16px 'Subtitle KR'", '가').catch(() => undefined);
+  }, []);
 
   // 미리보기 재생: 선택한 장면을 그 장면 길이만큼 재생한다.
   const [playing, setPlaying] = useState(false);
@@ -86,6 +102,31 @@ export function Editor({ projectId }: { projectId: string }) {
     navigate('/');
   };
 
+  // 영상 생성 요청. 서버는 '저장된' 내용으로 만들기 때문에 먼저 대기 중인 변경을 모두 저장한다.
+  const startRender = async () => {
+    if (startingRef.current) return; // 연속 클릭 방지(서버도 진행 중이면 새 작업을 만들지 않는다)
+    startingRef.current = true;
+    setStarting(true);
+    try {
+      if (!(await ed.saveNow())) {
+        toast.show('저장하지 못해서 영상을 만들 수 없어요. 다시 저장한 뒤 시도해 주세요');
+        return;
+      }
+      try {
+        await api.createRender(projectId);
+      } catch (e) {
+        // 이미 진행 중이면 새로 만들지 않고 진행 화면으로 보낸다
+        if (!(e instanceof ApiFailure && e.code === 'RENDER_IN_PROGRESS')) throw e;
+      }
+      navigate(`/projects/${projectId}/result`);
+    } catch (e) {
+      toast.show(e instanceof Error ? e.message : '영상 만들기를 요청하지 못했어요');
+    } finally {
+      startingRef.current = false;
+      setStarting(false);
+    }
+  };
+
   const pickFile = () => fileRef.current?.click();
   const onFiles = (files: FileList | null) => {
     const f = files?.[0];
@@ -109,9 +150,12 @@ export function Editor({ projectId }: { projectId: string }) {
           className="title-input"
           aria-label="영상 제목"
           value={draft.title}
-          maxLength={100}
+          maxLength={TITLE_MAX_LENGTH}
           placeholder="영상 제목을 입력하세요"
           onChange={(e) => ed.setTitle(e.target.value)}
+          onPaste={(e) => pasteCleaned(e, cleanTitle, TITLE_MAX_LENGTH, (v) => ed.setTitle(v))}
+          onCompositionStart={() => ed.setComposing(true)}
+          onCompositionEnd={() => ed.setComposing(false)}
         />
         {project.isSample && <SampleTag />}
         <SaveIndicator state={ed.save} savedAt={ed.savedAt} error={ed.saveError} onRetry={ed.retrySave} />
@@ -119,6 +163,11 @@ export function Editor({ projectId }: { projectId: string }) {
         <div className="total-chip">
           전체 길이 <strong>{total}초</strong>
         </div>
+        {project.lastVideo && (
+          <Link to={`/projects/${projectId}/result/${project.lastVideo.jobId}`} className="btn btn-ghost" style={{ color: 'var(--primary-text)' }}>
+            마지막 생성 영상 보기
+          </Link>
+        )}
         {busy ? (
           <button className="btn btn-soft" onClick={() => navigate(`/projects/${projectId}/result`)}>
             생성 진행 상황 보기
@@ -304,10 +353,13 @@ export function Editor({ projectId }: { projectId: string }) {
               ref={textRef}
               className="textarea"
               rows={3}
-              maxLength={200}
+              maxLength={TEXT_MAX_LENGTH}
               value={cur.text}
               placeholder="이 장면에서 보여줄 안내 문장을 입력하세요"
               onChange={(e) => ed.setText(sel, e.target.value)}
+              onPaste={(e) => pasteCleaned(e, cleanText, TEXT_MAX_LENGTH, (v) => ed.setText(sel, v))}
+              onCompositionStart={() => ed.setComposing(true)}
+              onCompositionEnd={() => ed.setComposing(false)}
             />
             {textLen === 0 && <span className="note-warn">문구가 비어 있어요. 영상 아래쪽 자막으로 보여줄 문장을 입력해 주세요.</span>}
             {textLen > TEXT_RECOMMENDED_LENGTH && <span className="note-warn">문구가 길어서 자막이 3줄 이상이 될 수 있어요. 짧게 나누면 더 읽기 쉬워요.</span>}
@@ -387,6 +439,8 @@ export function Editor({ projectId }: { projectId: string }) {
             setConfirmOpen(false);
             setTimeout(() => titleRef.current?.focus(), 0);
           }}
+          onStart={() => void startRender()}
+          starting={starting}
         />
       )}
       {toast.node}
@@ -510,4 +564,24 @@ function DurationControl({ value, onChange }: { value: number; onChange: (v: num
       )}
     </>
   );
+}
+
+/**
+ * 붙여 넣는 글을 저장 때와 같은 규칙(shared/text.ts)으로 정리한다(`pasteInto`, web/paste.ts). 정리가 필요 없으면 브라우저 기본 동작
+ * (되돌리기 기록 유지)에 맡긴다. 복사해 온 글에는 분해된 한글 자모(NFD, macOS)나 보이지 않는 문자(제로폭 공백 등)가 섞여 있을 수 있고,
+ * 그대로 붙이면 글자 수 한도(maxLength)를 일찍 채워 뒤가 잘린다. 입력 중 IME 조합에는 개입하지 않는다(paste 이벤트에서만 동작).
+ */
+function pasteCleaned(
+  e: ClipboardEvent<HTMLInputElement | HTMLTextAreaElement>,
+  clean: (s: string) => string,
+  max: number,
+  apply: (value: string) => void,
+) {
+  const el = e.currentTarget;
+  const start = el.selectionStart ?? el.value.length;
+  const result = pasteInto({ value: el.value, start, end: el.selectionEnd ?? start, pasted: e.clipboardData.getData('text'), clean, max });
+  if (!result) return;
+  e.preventDefault();
+  apply(result.next);
+  requestAnimationFrame(() => el.setSelectionRange(result.caret, result.caret));
 }

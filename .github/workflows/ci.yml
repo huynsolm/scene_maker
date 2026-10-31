@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      # Node 버전은 .nvmrc 에 지원하는 최소 버전(22.23.4, 보안 패치 포함)으로 고정한다. 최소 버전에서도 통과하는지 계속 확인하는 셈이다.
+      # 이보다 낮은 Node 는 package.json 의 engines + .npmrc 의 engine-strict 가 `npm ci` 에서 막는다.
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      # 영상 렌더링 테스트에 필요하다(libx264, libass 포함 빌드).
+      - name: ffmpeg 설치
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          ffmpeg -version | head -1
+
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+      - name: Chromium 설치
+        run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e

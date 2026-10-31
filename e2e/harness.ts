@@ -26,7 +26,9 @@ export async function startEnv(dataDir?: string): Promise<Env> {
   await app.listen({ port: 0, host: '127.0.0.1' });
   const addr = app.server.address();
   const port = typeof addr === 'object' && addr ? addr.port : 0;
-  const browser = await chromium.launch();
+  // 로케일이 UTF-8 이 아닌 Linux(예: LANG 이 비어 있는 컨테이너)에서는 Chromium 이 한글 다운로드 파일명을
+  // 만들지 못하고 'download' 로 저장한다. 서버 헤더(filename*=UTF-8'')는 올바르므로 테스트 브라우저만 UTF-8 로 띄운다.
+  const browser = await chromium.launch({ env: { ...process.env, LANG: 'C.UTF-8', LC_ALL: 'C.UTF-8' } as Record<string, string> });
   return {
     base: `http://127.0.0.1:${port}`,
     dataDir: dir,
