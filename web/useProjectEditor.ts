@@ -54,12 +54,23 @@ export function useProjectEditor(id: string, onToast: (msg: string) => void) {
   // 장면 추가·삭제 중에는 자동 저장이 장면 목록이 바뀌기 전의 ID 로 나가지 않게 기다린다.
   const structural = useRef<Promise<unknown> | null>(null);
   const structuralBusy = useRef(false); // 동시에 하나만(연속 클릭 방지)
+  // 서버를 바꾸는 요청(이미지 업로드·삭제, 장면 추가·삭제)은 한 줄로 세운다. 동시에 보내면 서버가 처리한 순서와 응답이 도착하는 순서가
+  // 달라져, 늦게 도착한 오래된 응답이 최신 화면(이미지·장면 목록)을 덮는다.
+  const queue = useRef<Promise<unknown>>(Promise.resolve());
+  const enqueue = <T,>(fn: () => Promise<T>): Promise<T> => {
+    const run = queue.current.then(fn);
+    queue.current = run.catch(() => undefined);
+    return run;
+  };
+  // 화면을 새로 불러올 때마다 올린다. 이전 세대에서 시작한 요청의 응답(성공이든 실패든)은 새 화면에 반영하지 않는다.
+  const loadGen = useRef(0);
 
   const load = useCallback(async () => {
+    const gen = ++loadGen.current;
     setLoadState('loading');
     try {
       const p = await api.getProject(id);
-      if (!alive.current) return;
+      if (!alive.current || gen !== loadGen.current) return;
       const d: SaveBody = {
         title: p.title,
         scenes: p.scenes.map((s) => ({ id: s.id, text: s.text, durationSec: s.durationSec })),
@@ -76,7 +87,7 @@ export function useProjectEditor(id: string, onToast: (msg: string) => void) {
       setSavedAt(hm(new Date(p.updatedAt)));
       setLoadState('ready');
     } catch (e) {
-      if (!alive.current) return;
+      if (!alive.current || gen !== loadGen.current) return;
       setLoadState(e instanceof ApiFailure && e.status === 404 ? 'notfound' : 'error');
     }
   }, [id]);
@@ -106,10 +117,11 @@ export function useProjectEditor(id: string, onToast: (msg: string) => void) {
   const send = useCallback(async (): Promise<boolean> => {
     const body = toSendBody(draftRef.current!);
     const sentVersion = version.current;
+    const gen = loadGen.current;
     setSave('saving');
     try {
       const p = await api.saveProject(id, body);
-      if (!alive.current) return false;
+      if (!alive.current || gen !== loadGen.current) return false; // 그 사이 화면을 새로 불러왔다면 이 응답은 지난 화면의 것이다
       savedVersion.current = Math.max(savedVersion.current, sentVersion);
       saveFailedRef.current = false;
       setProject((prev) => (prev ? { ...prev, status: p.status, updatedAt: p.updatedAt } : prev));
@@ -130,6 +142,7 @@ export function useProjectEditor(id: string, onToast: (msg: string) => void) {
       }
       return true;
     } catch (e) {
+      if (gen !== loadGen.current) return false; // 새로 불러오기 전에 보낸 요청의 실패는 새 화면의 상태가 아니다
       saveFailedRef.current = true;
       if (alive.current && e instanceof ApiFailure && e.code === 'SCENES_CHANGED') setConflict(true);
       if (alive.current) {
@@ -167,6 +180,8 @@ export function useProjectEditor(id: string, onToast: (msg: string) => void) {
    * 영상 생성은 서버에 저장된 내용을 기준으로 만들기 때문에, 요청 직전에 반드시 호출한다.
    */
   const saveNow = useCallback(async (): Promise<boolean> => {
+    // 줄 서 있는 이미지 업로드·장면 추가·삭제가 끝난 뒤의 상태를 저장한다(끝나기 전에 영상을 요청하면 이전 내용으로 만들어진다).
+    await queue.current;
     clearTimeout(timer.current);
     const ok = await flush();
     return ok && version.current === savedVersion.current;
@@ -212,21 +227,26 @@ export function useProjectEditor(id: string, onToast: (msg: string) => void) {
       return;
     }
     const sceneId = draftRef.current!.scenes[position]!.id!;
+    const gen = loadGen.current;
     setUploading(sceneId);
     try {
-      applyImages(await api.uploadImage(id, sceneId, file));
+      const p = await enqueue(() => api.uploadImage(id, sceneId, file));
+      if (gen === loadGen.current) applyImages(p);
     } catch (e) {
-      onToast(e instanceof Error ? e.message : '이미지를 올리지 못했어요');
+      if (gen === loadGen.current) onToast(e instanceof Error ? e.message : '이미지를 올리지 못했어요');
     } finally {
       if (alive.current) setUploading((cur) => (cur === sceneId ? null : cur));
     }
   };
 
   const removeImage = async (position: number) => {
+    const sceneId = draftRef.current!.scenes[position]!.id!;
+    const gen = loadGen.current;
     try {
-      applyImages(await api.removeImage(id, draftRef.current!.scenes[position]!.id!));
+      const p = await enqueue(() => api.removeImage(id, sceneId));
+      if (gen === loadGen.current) applyImages(p);
     } catch (e) {
-      onToast(e instanceof Error ? e.message : '이미지를 지우지 못했어요');
+      if (gen === loadGen.current) onToast(e instanceof Error ? e.message : '이미지를 지우지 못했어요');
     }
   };
 
@@ -239,34 +259,41 @@ export function useProjectEditor(id: string, onToast: (msg: string) => void) {
     if (structuralBusy.current || !draftRef.current) return null;
     structuralBusy.current = true;
     setStructuring(true);
+    const gen = loadGen.current;
     try {
-      clearTimeout(timer.current);
-      if (!(await flush())) {
-        onToast('저장하지 못해서 장면을 바꿀 수 없어요. 다시 저장한 뒤 시도해 주세요');
-        return null;
-      }
-      const op = (async () => {
-        const p = await call();
-        const cur = draftRef.current!;
-        const byId = new Map(cur.scenes.map((s) => [s.id, s]));
-        const next: SaveBody = {
-          title: cur.title,
-          scenes: p.scenes.map((s) => byId.get(s.id) ?? { id: s.id, text: s.text, durationSec: s.durationSec }),
-        };
-        draftRef.current = next;
-        setDraft(next);
-        setProject(p);
-        return p;
-      })();
-      structural.current = op;
-      try {
-        return await op;
-      } finally {
-        structural.current = null;
-      }
+      return await enqueue(async () => {
+        if (gen !== loadGen.current) return null;
+        clearTimeout(timer.current);
+        if (!(await flush())) {
+          onToast('저장하지 못해서 장면을 바꿀 수 없어요. 다시 저장한 뒤 시도해 주세요');
+          return null;
+        }
+        const op = (async () => {
+          const p = await call();
+          if (gen !== loadGen.current) return null; // 그 사이 화면을 새로 불러왔다
+          const cur = draftRef.current!;
+          const byId = new Map(cur.scenes.map((s) => [s.id, s]));
+          const next: SaveBody = {
+            title: cur.title,
+            scenes: p.scenes.map((s) => byId.get(s.id) ?? { id: s.id, text: s.text, durationSec: s.durationSec }),
+          };
+          draftRef.current = next;
+          setDraft(next);
+          setProject(p);
+          return p;
+        })();
+        structural.current = op;
+        try {
+          return await op;
+        } finally {
+          structural.current = null;
+        }
+      });
     } catch (e) {
-      if (e instanceof ApiFailure && e.code === 'NOT_FOUND') setConflict(true);
-      onToast(e instanceof Error ? e.message : '장면을 바꾸지 못했어요');
+      if (gen === loadGen.current) {
+        if (e instanceof ApiFailure && e.code === 'NOT_FOUND') setConflict(true);
+        onToast(e instanceof Error ? e.message : '장면을 바꾸지 못했어요');
+      }
       return null;
     } finally {
       structuralBusy.current = false;

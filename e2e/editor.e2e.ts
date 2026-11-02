@@ -292,6 +292,133 @@ describe('1단계 화면 흐름', () => {
       await page.close();
     });
 
+    /** 문구·이미지가 모두 채워진 프로젝트(바로 영상을 만들 수 있다). */
+    function completeProject(title: string) {
+      const p = env.store.createProject({ title });
+      env.store.saveProject(p.id, { title, scenes: [0, 1, 2].map((i) => ({ text: `장면 ${i + 1} 문구`, durationSec: 3 })) });
+      [0, 1, 2].forEach((i) => env.store.attachImage(p.id, i, solidPng(1280, 720, [40 * i + 20, 90, 160]), `c${i}.png`));
+      return p;
+    }
+    /** 서버는 바로 처리하고 응답만 늦게 돌려준다(응답 순서가 뒤바뀌는 상황을 만든다). */
+    const delayResponse = async (page: Page, urlRe: RegExp, method: string, ms: number, log?: string[], tag?: string) =>
+      page.route(urlRe, async (route) => {
+        if (route.request().method() !== method) return route.continue();
+        log?.push(`${tag}:request`);
+        const res = await route.fetch();
+        await new Promise((r) => setTimeout(r, ms));
+        log?.push(`${tag}:response`);
+        await route.fulfill({ response: res });
+      });
+
+    it('삭제 확인 창: Tab 이 창 안에서만 돌고, Esc 로 닫으면 열었던 버튼으로 초점이 돌아온다', async () => {
+      const page = await env.newPage();
+      await newProject(page);
+      const del = page.getByTestId('delete-scene');
+      await del.focus();
+      await del.press('Enter');
+      const dialog = page.getByRole('dialog');
+      await dialog.waitFor();
+      const inDialog = () => page.evaluate(() => !!document.activeElement?.closest('[role=dialog]'));
+      expect(await page.evaluate(() => document.activeElement?.textContent)).toBe('취소'); // 안전한 쪽에서 시작
+      for (let i = 0; i < 5; i++) {
+        await page.keyboard.press('Tab');
+        expect(await inDialog(), `Tab ${i + 1}`).toBe(true);
+      }
+      // 취소(첫 요소)에서 Shift+Tab 은 마지막 요소(삭제)로 간다
+      await page.evaluate(() => (document.querySelector('[role=dialog] [data-autofocus]') as HTMLElement).focus());
+      await page.keyboard.press('Shift+Tab');
+      expect(await page.evaluate(() => document.activeElement?.getAttribute('data-testid'))).toBe('confirm-delete-scene');
+      await page.keyboard.press('Escape');
+      await eventually(async () => (await dialog.count()) === 0, '창 닫힘');
+      expect(await page.evaluate(() => document.activeElement?.getAttribute('data-testid'))).toBe('delete-scene');
+      await page.close();
+    });
+
+    it('장면을 추가·삭제하는 중에는 영상 만들기를 시작할 수 없고, 끝나면 다시 쓸 수 있다', async () => {
+      const p = completeProject('구조 변경 중 생성');
+      const page = await env.newPage();
+      await page.goto(`${env.base}/projects/${p.id}`);
+      await page.getByLabel('영상 제목').waitFor();
+      await delayResponse(page, /\/api\/projects\/[^/]+\/scenes$/, 'POST', 1500);
+      await page.getByTestId('add-scene').click();
+      await eventually(async () => await page.getByTestId('open-render').isDisabled(), '진행 중에는 비활성화');
+      await eventually(async () => (await cards(page).count()) === 4, '장면 4개');
+      await eventually(async () => !(await page.getByTestId('open-render').isDisabled()), '끝나면 활성화');
+      await page.close();
+    });
+
+    it('이미지 업로드가 끝나기 전에 영상을 요청해도 업로드가 끝난 뒤의 내용으로 만들어진다', async () => {
+      const p = completeProject('업로드 중 생성');
+      const page = await env.newPage();
+      await page.goto(`${env.base}/projects/${p.id}`);
+      await page.getByLabel('영상 제목').waitFor();
+      const log: string[] = [];
+      await delayResponse(page, /\/api\/projects\/[^/]+\/scenes\/[^/]+\/image$/, 'POST', 1500, log, 'upload');
+      page.on('request', (r) => r.method() === 'POST' && /\/renders$/.test(r.url()) && log.push('render:request'));
+      await page.getByTestId('file-input').setInputFiles(tmp('replace.png', solidPng(320, 180, [250, 10, 10])));
+      await eventually(async () => log.includes('upload:request'), '업로드 요청이 서버에 도착');
+      await page.getByTestId('open-render').click();
+      await page.getByRole('button', { name: '영상 만들기 시작' }).click();
+      await eventually(async () => log.includes('render:request'), '렌더 요청', 12000);
+      expect(log.indexOf('upload:response')).toBeGreaterThanOrEqual(0);
+      expect(log.indexOf('render:request')).toBeGreaterThan(log.indexOf('upload:response')); // 업로드가 끝난 뒤에 요청한다
+      await page.close();
+    });
+
+    it('늦게 도착한 장면 추가 응답이 그 사이 올린 이미지를 화면에서 지우지 않는다', async () => {
+      const p = completeProject('응답 순서');
+      const page = await env.newPage();
+      await page.goto(`${env.base}/projects/${p.id}`);
+      await page.getByLabel('영상 제목').waitFor();
+      await delayResponse(page, /\/api\/projects\/[^/]+\/scenes$/, 'POST', 1500);
+      await page.getByTestId('add-scene').click(); // 서버는 바로 처리하지만 응답은 1.5초 뒤에 도착한다
+      await cards(page).nth(0).click();
+      await page.getByTestId('file-input').setInputFiles(tmp('late.png', solidPng(320, 180, [10, 250, 10])));
+      await eventually(async () => (await cards(page).count()) === 4, '장면 4개');
+      const thumbSrc = async () => page.locator('[data-testid=scene-card-0] img').getAttribute('src');
+      await eventually(async () => (await page.locator('[data-testid=scene-card-0] img').count()) === 1, '썸네일이 보임');
+      const shown = await page.evaluate(async () => {
+        const img = document.querySelector('[data-testid=scene-card-0] img') as HTMLImageElement;
+        return { w: img.naturalWidth, h: img.naturalHeight };
+      });
+      expect(shown).toEqual({ w: 320, h: 180 }); // 새로 올린 이미지(320x180)가 보인다(원래 1280x720 이 아니다)
+      expect(await thumbSrc()).toBeTruthy();
+      await page.close();
+    });
+
+    it('새로 불러온 뒤에 도착한 이전 저장의 409 응답이 충돌 안내를 다시 켜지 않는다', async () => {
+      const a = await env.newPage();
+      await newProject(a);
+      const id = projectIdOf(a);
+      const b = await env.newPage();
+      await b.goto(`${env.base}/projects/${id}`);
+      await b.getByLabel('영상 제목').waitFor();
+      await a.locator('[data-testid=scene-card-1]').click();
+      await a.getByTestId('delete-scene').click();
+      await a.getByTestId('confirm-delete-scene').click();
+      await eventually(async () => (await cards(a).count()) === 2, 'a: 장면 2개');
+      await b.locator('#scene-text').fill('첫 입력'); // 첫 저장은 바로 409
+      await eventually(async () => (await b.getByTestId('scenes-conflict').count()) === 1, '충돌 안내');
+      // 이후의 저장 요청은 서버가 처리한 응답(409)을 3초 늦게 돌려준다
+      let inFlight = 0;
+      await b.route(new RegExp(`/api/projects/${id}$`), async (route) => {
+        if (route.request().method() !== 'PUT') return route.continue();
+        inFlight++;
+        const res = await route.fetch();
+        await new Promise((r) => setTimeout(r, 3000));
+        await route.fulfill({ response: res });
+      });
+      await b.locator('#scene-text').fill('두 번째 입력');
+      await eventually(async () => inFlight === 1, '늦은 저장 요청이 나감');
+      await b.getByRole('button', { name: '새로 불러오기' }).click();
+      await eventually(async () => (await b.getByTestId('scenes-conflict').count()) === 0 && (await cards(b).count()) === 2, '새로 불러옴');
+      await new Promise((r) => setTimeout(r, 3500)); // 늦은 409 가 도착할 시간
+      expect(await b.getByTestId('scenes-conflict').count()).toBe(0);
+      expect(await b.getByTestId('save-state').innerText()).toContain('저장됨');
+      await a.close();
+      await b.close();
+    });
+
     it('다른 화면에서 장면이 바뀌면 저장이 거절되고 안내 후 새로 불러올 수 있다(지운 장면이 되살아나지 않는다)', async () => {
       const a = await env.newPage();
       await newProject(a);

@@ -111,7 +111,7 @@ export function Editor({ projectId }: { projectId: string }) {
 
   // 영상 생성 요청. 서버는 '저장된' 내용으로 만들기 때문에 먼저 대기 중인 변경을 모두 저장한다.
   const startRender = async () => {
-    if (startingRef.current) return; // 연속 클릭 방지(서버도 진행 중이면 새 작업을 만들지 않는다)
+    if (startingRef.current || ed.structuring) return; // 연속 클릭 방지, 장면을 바꾸는 중에는 시작하지 않는다(서버도 진행 중이면 새 작업을 만들지 않는다)
     startingRef.current = true;
     setStarting(true);
     try {
@@ -142,6 +142,8 @@ export function Editor({ projectId }: { projectId: string }) {
     setDeleteOpen(false);
     await ed.deleteScene(cur.id); // 선택 번호는 아래 보정으로 범위 안에 머문다(지운 자리의 다음 장면, 없으면 마지막)
     resetPlayback();
+    // 삭제 버튼은 방금 눌러서(또는 장면이 1개가 되어) 쓸 수 없을 수 있으니 선택된 장면 카드로 초점을 옮긴다.
+    requestAnimationFrame(() => document.querySelector<HTMLElement>('.scene-card.on')?.focus());
   };
 
   const pickFile = () => fileRef.current?.click();
@@ -192,7 +194,7 @@ export function Editor({ projectId }: { projectId: string }) {
             생성 진행 상황 보기
           </button>
         ) : (
-          <button className="btn btn-primary" onClick={() => setConfirmOpen(true)}>
+          <button className="btn btn-primary" onClick={() => setConfirmOpen(true)} disabled={ed.structuring} data-testid="open-render">
             영상 만들기
           </button>
         )}
