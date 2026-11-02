@@ -375,14 +375,16 @@ describe('1단계 화면 흐름', () => {
       await cards(page).nth(0).click();
       await page.getByTestId('file-input').setInputFiles(tmp('late.png', solidPng(320, 180, [10, 250, 10])));
       await eventually(async () => (await cards(page).count()) === 4, '장면 4개');
-      const thumbSrc = async () => page.locator('[data-testid=scene-card-0] img').getAttribute('src');
-      await eventually(async () => (await page.locator('[data-testid=scene-card-0] img').count()) === 1, '썸네일이 보임');
-      const shown = await page.evaluate(async () => {
-        const img = document.querySelector('[data-testid=scene-card-0] img') as HTMLImageElement;
-        return { w: img.naturalWidth, h: img.naturalHeight };
-      });
-      expect(shown).toEqual({ w: 320, h: 180 }); // 새로 올린 이미지(320x180)가 보인다(원래 1280x720 이 아니다)
-      expect(await thumbSrc()).toBeTruthy();
+      // 새로 올린 이미지(320x180)가 보일 때까지 기다린다. 요소가 생기자마자 읽으면 아직 로드 중이거나 이전 이미지(1280x720)일 수 있다.
+      const naturalSize = () =>
+        page.evaluate(() => {
+          const img = document.querySelector('[data-testid=scene-card-0] img') as HTMLImageElement | null;
+          return img ? `${img.naturalWidth}x${img.naturalHeight}` : 'none';
+        });
+      await eventually(async () => (await naturalSize()) === '320x180', '새로 올린 이미지가 보임', 10000);
+      // 늦게 도착한 추가 응답이 있었다면 이미 반영된 뒤이므로, 잠시 뒤에도 같은 이미지여야 한다
+      await new Promise((r) => setTimeout(r, 800));
+      expect(await naturalSize()).toBe('320x180');
       await page.close();
     });
 
