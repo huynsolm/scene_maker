@@ -535,6 +535,45 @@ describe('1단계 화면 흐름', () => {
       await page.close();
     });
 
+    it('좁은 화면(768·390·320px)에서 가로로 넘치지 않고, 장면 10개여도 카드가 읽을 수 있는 폭을 지킨다', async () => {
+      const p = env.store.createProject({ title: '좁은 화면' });
+      for (let i = 3; i < 10; i++) env.store.addScene(p.id);
+      for (const [w, minCard] of [[1280, 200], [768, 140], [390, 140], [320, 140]] as const) {
+        const page = await env.newPage({ width: w, height: 900 });
+        await page.goto(`${env.base}/projects/${p.id}`);
+        await page.getByLabel('영상 제목').waitFor();
+        const m = await page.evaluate(() => ({
+          scrollW: document.documentElement.scrollWidth,
+          clientW: document.documentElement.clientWidth,
+          card: (document.querySelector('[data-testid=scene-card-0]') as HTMLElement).getBoundingClientRect().width,
+          cards: document.querySelectorAll('[data-testid^=scene-card-]').length,
+        }));
+        expect(m.cards, `${w}px 장면 수`).toBe(10);
+        expect(m.scrollW, `${w}px 가로 넘침`).toBeLessThanOrEqual(m.clientW);
+        expect(m.card, `${w}px 카드 폭`).toBeGreaterThanOrEqual(minCard);
+        await page.close();
+      }
+    });
+
+    it('좁은 화면에서 장면을 추가하면 새 카드가 가로 스크롤 목록의 보이는 곳으로 온다', async () => {
+      const p = env.store.createProject({ title: '추가 후 스크롤' });
+      for (let i = 3; i < 8; i++) env.store.addScene(p.id); // 8개: 390px 에서는 새 카드가 화면 밖
+      const page = await env.newPage({ width: 390, height: 900 });
+      await page.goto(`${env.base}/projects/${p.id}`);
+      await page.getByLabel('영상 제목').waitFor();
+      await page.getByTestId('add-scene').click();
+      await eventually(async () => (await cards(page).count()) === 9, '장면 9개');
+      await eventually(async () => {
+        const r = await page.evaluate(() => {
+          const c = document.querySelector('[data-testid=scene-card-8]') as HTMLElement;
+          const b = c.getBoundingClientRect();
+          return { left: b.left, right: b.right, vw: window.innerWidth };
+        });
+        return r.left >= 0 && r.right <= r.vw + 1;
+      }, '새 카드가 보이는 곳에 있음');
+      await page.close();
+    });
+
     it('다른 화면에서 장면이 바뀌면 저장이 거절되고 안내 후 새로 불러올 수 있다(지운 장면이 되살아나지 않는다)', async () => {
       const a = await env.newPage();
       await newProject(a);
