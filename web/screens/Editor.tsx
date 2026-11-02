@@ -224,7 +224,9 @@ export function Editor({ projectId }: { projectId: string }) {
       {ed.conflict && (
         <div className="conflict-banner" role="alert" data-testid="scenes-conflict">
           <span>
-            장면 구성이 다른 곳에서 바뀌어서 저장할 수 없어요. 새로 불러오면 이 화면에서 아직 저장되지 않은 수정은 사라져요.
+            {ed.conflict === 'unknown'
+              ? '서버 응답이 없어서 장면을 바꿨는지 알 수 없어요. 새로 불러와 확인해 주세요. 새로 불러오면 이 화면에서 아직 저장되지 않은 수정은 사라져요.'
+              : '장면 구성이 다른 곳에서 바뀌어서 저장할 수 없어요. 새로 불러오면 이 화면에서 아직 저장되지 않은 수정은 사라져요.'}
           </span>
           <button className="btn btn-sm" onClick={() => void ed.reload()}>
             새로 불러오기
