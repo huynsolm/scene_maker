@@ -217,8 +217,11 @@ a.btn, a.btn:hover { text-decoration: none; }
   .col-inspector { width: auto; border-left: none; border-bottom: 1px solid var(--border); order: 2; }
   .col-preview { order: 3; overflow: visible; }
 }
-@media (min-width: 641px) and (max-width: 1099px) {
-  .scene-list { flex-direction: row; }
+/* 좁은 화면의 장면 목록은 가로 스크롤 띠다. 카드를 폭에 맞춰 줄이면(장면 10개면 65px) 글자가 깨지고,
+   세로로 쌓으면(카드 하나가 약 290px) 편집 패널이 한참 아래로 밀린다. */
+@media (max-width: 1099px) {
+  .scene-list { flex-direction: row; overflow-x: auto; padding-bottom: 6px; scroll-snap-type: x proximity; -webkit-overflow-scrolling: touch; }
+  .scene-list .scene-card { flex: 0 0 152px; min-width: 152px; scroll-snap-align: start; }
 }
 @media (max-width: 640px) {
   .topbar { padding: 10px 12px; gap: 10px; }
