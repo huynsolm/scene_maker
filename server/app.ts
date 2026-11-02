@@ -2,7 +2,7 @@ import fastifyMultipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
 import Fastify, { type FastifyInstance } from 'fastify';
 import fs from 'node:fs';
-import { ZodError } from 'zod';
+import { ZodError, z } from 'zod';
 import { IMAGE_MAX_BYTES } from '../shared/limits';
 import { saveProjectSchema } from '../shared/schemas';
 import { loadConfig, type Config } from './config';
@@ -125,6 +125,23 @@ export async function buildApp(config: AppConfig, deps: { renderer?: Renderer } 
     const job = renders.createJob(req.params.id);
     queue.kick();
     return reply.status(202).send({ job: renders.toView(job) });
+  });
+
+  // 지난 영상 목록(완성된 영상만, 최신순). `limit`(기본 10, 최대 50)과 `before`(직전 페이지 마지막 항목의 id)로 나누어 읽는다.
+  app.get<IdParams & { Querystring: { limit?: string; before?: string } }>('/api/projects/:id/renders', async (req) => {
+    const q = z
+      .object({
+        limit: z.coerce.number().int().min(1).max(50).default(10),
+        before: z.string().regex(/^[0-9a-f-]{36}$/).optional(),
+      })
+      .parse(req.query);
+    return { list: renders.listDone(req.params.id, q) };
+  });
+
+  // 완성된 영상 하나를 지운다. 프로젝트 소속을 요구한다(다른 프로젝트의 작업 id 는 404). 응답은 갱신된 목록 첫 페이지와 lastVideo.
+  app.delete<{ Params: { id: string; jobId: string } }>('/api/projects/:id/renders/:jobId', async (req) => {
+    renders.deleteVideo(req.params.id, req.params.jobId);
+    return { list: renders.listDone(req.params.id, { limit: 10 }), lastVideo: store.getProject(req.params.id).lastVideo };
   });
 
   app.get<IdParams>('/api/projects/:id/renders/latest', async (req) => {

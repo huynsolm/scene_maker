@@ -4,6 +4,7 @@ export type ErrorCode =
   | 'PROJECT_BUSY'
   | 'RENDER_INCOMPLETE'
   | 'RENDER_IN_PROGRESS'
+  | 'RENDER_NOT_DELETABLE'
   | 'SCENES_CHANGED'
   | 'SCENE_LIMIT'
   | 'SCENE_MIN'

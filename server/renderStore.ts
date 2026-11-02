@@ -3,9 +3,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { VIDEO } from '../shared/limits';
 import { cleanText, cleanTitle } from '../shared/text';
-import type { JobStatus, RenderJobView } from '../shared/types';
+import type { JobStatus, RenderJobView, RenderList } from '../shared/types';
 import type { Db } from './db';
 import { AppError, notFound } from './errors';
+import { rmdirIfEmpty, safeRm } from './fsSafe';
 import { RenderError, serverRestarted } from './render/errors';
 import { imageUrl, type Store } from './store';
 
@@ -134,6 +135,98 @@ export class RenderStore {
       .get(projectId) as JobRow | undefined;
   }
 
+  // ───────── 지난 영상 목록과 삭제 ─────────
+
+  /**
+   * 완성된 영상 목록(최신순). 정렬은 `Store.getProject().lastVideo` 와 같다: `finished_at DESC, rowid DESC`(같은 시각이면 rowid 가 큰 쪽이 먼저).
+   * `latestForProject` 는 실패·진행 중 작업도 돌려주므로 여기서는 쓰지 않는다.
+   * `before` 는 직전 페이지 마지막 항목의 id 이며 그 다음 항목부터 돌려준다. 그 영상이 이미 지워졌으면 404 로, 처음부터 다시 읽게 한다.
+   */
+  listDone(projectId: string, opts: { limit: number; before?: string }): RenderList {
+    if (!this.db.prepare(`SELECT 1 FROM projects WHERE id = ?`).get(projectId)) throw notFound();
+    const DONE = `project_id = ? AND status = 'done' AND video_file IS NOT NULL`;
+    const total = (this.db.prepare(`SELECT COUNT(*) AS n FROM render_jobs WHERE ${DONE}`).get(projectId) as { n: number }).n;
+    let rows: JobRow[];
+    if (opts.before) {
+      const cur = this.db
+        .prepare(`SELECT rowid AS rid, finished_at FROM render_jobs WHERE id = ? AND ${DONE}`)
+        .get(opts.before, projectId) as { rid: number; finished_at: string } | undefined;
+      if (!cur) throw notFound('목록의 기준 영상');
+      rows = this.db
+        .prepare(`SELECT * FROM render_jobs WHERE ${DONE} AND (finished_at, rowid) < (?, ?) ORDER BY finished_at DESC, rowid DESC LIMIT ?`)
+        .all(projectId, cur.finished_at, cur.rid, opts.limit + 1) as JobRow[];
+    } else {
+      rows = this.db
+        .prepare(`SELECT * FROM render_jobs WHERE ${DONE} ORDER BY finished_at DESC, rowid DESC LIMIT ?`)
+        .all(projectId, opts.limit + 1) as JobRow[];
+    }
+    const hasMore = rows.length > opts.limit;
+    const items = rows.slice(0, opts.limit).map((r) => {
+      const v = this.toView(r);
+      return {
+        id: v.id,
+        createdAt: v.createdAt,
+        finishedAt: v.finishedAt!,
+        totalSec: v.snapshot.totalSec,
+        sceneCount: v.snapshot.scenes.length,
+        outdated: v.outdated,
+        videoUrl: v.videoUrl!,
+        downloadUrl: v.downloadUrl!,
+      };
+    });
+    return { items, hasMore, total };
+  }
+
+  /**
+   * 완성된 영상 하나를 지운다(작업 기록, 영상 파일, 이 영상에만 쓰이던 이미지). 되돌릴 수 없다.
+   *
+   * 순서: (1) 한 트랜잭션에서 연결 이미지 id 를 읽고, 작업 행을 지우고(연결은 CASCADE), 프로젝트 상태를 다시 계산한다.
+   * (2) 커밋 뒤 영상 파일을 지우고, (3) 읽어 둔 이미지마다 `collectImageIfUnused`(현재 장면과 남은 모든 작업이 참조하지 않을 때만 삭제).
+   * 파일 삭제는 각각 실패해도 계속 진행하고(`safeRm`) 남은 파일은 다음 서버 시작 때 정리한다.
+   * `projects.updated_at` 은 바꾸지 않는다 — 삭제는 편집 내용의 변경이 아니며, 바꾸면 남은 영상이 모두 '내용이 바뀐 뒤'로 표시된다.
+   * 서버는 단일 프로세스이고 이 구간이 동기 실행이라 요청 사이의 끼어들기가 없다(파일 작업을 비동기로 바꾸면 다시 검토해야 한다).
+   */
+  deleteVideo(projectId: string, jobId: string): { removedImages: number } {
+    const job = this.getJob(jobId);
+    if (!job || job.project_id !== projectId) throw notFound('영상'); // 다른 프로젝트의 작업은 없는 것으로 취급
+    if (job.status === 'waiting' || job.status === 'generating') {
+      throw new AppError('RENDER_NOT_DELETABLE', 409, '영상을 만드는 중이라 지울 수 없어요. 끝난 뒤에 다시 시도해 주세요.');
+    }
+    if (job.status !== 'done') {
+      throw new AppError('RENDER_NOT_DELETABLE', 409, '완성된 영상만 지울 수 있어요.');
+    }
+    let imageIds: string[] = [];
+    this.db.transaction(() => {
+      imageIds = (this.db.prepare(`SELECT image_id FROM render_job_images WHERE job_id = ?`).all(jobId) as Array<{ image_id: string }>).map(
+        (r) => r.image_id,
+      );
+      this.db.prepare(`DELETE FROM render_jobs WHERE id = ?`).run(jobId);
+      this.recomputeProjectStatus(projectId);
+    })();
+
+    safeRm(this.videoPathFor(projectId, jobId));
+    rmdirIfEmpty(path.join(this.store.videosDir, projectId));
+    let removedImages = 0;
+    for (const id of imageIds) if (this.store.collectImageIfUnused(id)) removedImages++;
+    return { removedImages };
+  }
+
+  /**
+   * 작업이 지워진 뒤 프로젝트 상태를 다시 계산한다. 활성 작업이 있으면 건드리지 않는다. 아니면 **생성 순서상** 가장 최근 작업
+   * (`created_at DESC, rowid DESC`, 상태 무관 — `latestForProject` 와 같다)의 결과를 쓰되, 그 작업을 요청한 뒤에 내용이 고쳐졌으면
+   * '편집 중'(`finish` 와 같은 규칙). 남은 작업이 없으면 '편집 중'.
+   */
+  private recomputeProjectStatus(projectId: string) {
+    if (this.activeJob(projectId)) return;
+    const latest = this.db
+      .prepare(`SELECT status, created_at FROM render_jobs WHERE project_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1`)
+      .get(projectId) as { status: JobStatus; created_at: string } | undefined;
+    const proj = this.db.prepare(`SELECT updated_at FROM projects WHERE id = ?`).get(projectId) as { updated_at: string } | undefined;
+    if (!proj) return;
+    const status = !latest || proj.updated_at > latest.created_at ? 'editing' : latest.status;
+    this.db.prepare(`UPDATE projects SET status = ? WHERE id = ?`).run(status, projectId);
+  }
+
   toView(j: JobRow): RenderJobView {
     const snap = JSON.parse(j.snapshot_json) as Snapshot;
     const done = j.status === 'done' && !!j.video_file;
@@ -254,10 +347,13 @@ export class RenderStore {
   }
 
   /** 임시 작업 폴더와, 완료된 작업이 가리키지 않는 영상 파일(쓰다 만 파일 포함)을 지운다. */
-  sweepFiles(): { removedTmp: boolean; removedVideos: number } {
+  sweepFiles(): { removedTmp: boolean; removedVideos: number; failedFiles: number } {
+    let failedFiles = 0;
     const tmp = path.join(this.store.dataDir, 'tmp');
-    const removedTmp = fs.existsSync(tmp);
-    fs.rmSync(tmp, { recursive: true, force: true });
+    const hadTmp = fs.existsSync(tmp);
+    // 잠긴 파일 하나 때문에 서버 시작 전체가 실패하지 않게 파일마다 따로 시도하고, 못 지운 것은 다음 시작 때 다시 시도한다.
+    const removedTmp = hadTmp && safeRm(tmp, { recursive: true });
+    if (hadTmp && !removedTmp) failedFiles++;
 
     const known = new Set(
       (this.db.prepare(`SELECT project_id, video_file FROM render_jobs WHERE video_file IS NOT NULL`).all() as Array<{
@@ -273,13 +369,13 @@ export class RenderStore {
         if (!fs.statSync(full).isDirectory()) continue;
         for (const f of fs.readdirSync(full)) {
           if (!known.has(`${dir}/${f}`)) {
-            fs.rmSync(path.join(full, f), { force: true });
-            removedVideos++;
+            if (safeRm(path.join(full, f))) removedVideos++;
+            else failedFiles++;
           }
         }
-        if (fs.readdirSync(full).length === 0) fs.rmdirSync(full);
+        rmdirIfEmpty(full);
       }
     }
-    return { removedTmp, removedVideos };
+    return { removedTmp, removedVideos, failedFiles };
   }
 }

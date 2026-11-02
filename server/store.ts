@@ -11,6 +11,7 @@ import { cleanText, cleanTitle } from '../shared/text';
 import type { Project, ProjectStatus, ProjectSummary, Scene } from '../shared/types';
 import type { Db } from './db';
 import { AppError, notFound } from './errors';
+import { rmdirIfEmpty, safeRm } from './fsSafe';
 import { inspectImage, sanitizeDisplayName } from './imageInspect';
 
 interface ProjectRow {
@@ -411,7 +412,8 @@ export class Store {
       | undefined;
     if (!row || row.in_scene || row.in_job) return false;
     this.db.prepare(`DELETE FROM images WHERE id = ?`).run(imageId);
-    fs.rmSync(this.imagePath(row.project_id, row.stored_name), { force: true });
+    // 행은 이미 지웠다. 파일 삭제가 실패(잠금·권한)해도 호출한 요청을 실패시키지 않고, 남은 파일은 시작 시 sweepOrphans 가 지운다.
+    safeRm(this.imagePath(row.project_id, row.stored_name));
     return true;
   }
 
@@ -422,9 +424,10 @@ export class Store {
    *  3) DB 에 없는 파일 삭제
    * 사용자가 입력한 내용(제목, 문구, 길이)과 장면이 쓰는 이미지는 건드리지 않는다.
    */
-  sweepOrphans(): { removedImages: number; removedFiles: number } {
+  sweepOrphans(): { removedImages: number; removedFiles: number; failedFiles: number } {
     let removedImages = 0;
     let removedFiles = 0;
+    let failedFiles = 0;
 
     const unused = this.db
       .prepare(
@@ -447,13 +450,14 @@ export class Store {
         if (!fs.statSync(full).isDirectory()) continue;
         for (const file of fs.readdirSync(full)) {
           if (!known.has(`${projectDir}/${file}`)) {
-            fs.rmSync(path.join(full, file), { force: true });
-            removedFiles++;
+            // 잠긴 파일 하나 때문에 서버 시작 전체가 실패하지 않게 파일마다 따로 시도하고, 못 지운 것은 다음 시작 때 다시 시도한다.
+            if (safeRm(path.join(full, file))) removedFiles++;
+            else failedFiles++;
           }
         }
-        if (fs.readdirSync(full).length === 0) fs.rmdirSync(full);
+        rmdirIfEmpty(full);
       }
     }
-    return { removedImages, removedFiles };
+    return { removedImages, removedFiles, failedFiles };
   }
 }
