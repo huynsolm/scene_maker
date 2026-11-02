@@ -6,6 +6,7 @@ import {
   SCENE_COUNT,
 } from '../shared/limits';
 import type { SaveProjectInput } from '../shared/schemas';
+import { cleanText, cleanTitle } from '../shared/text';
 import type { Project, ProjectStatus, ProjectSummary, Scene } from '../shared/types';
 import type { Db } from './db';
 import { AppError, notFound } from './errors';
@@ -95,7 +96,8 @@ export class Store {
           `INSERT INTO projects (id, title, status, is_sample, created_at, updated_at)
            VALUES (?, ?, 'editing', ?, ?, ?)`,
         )
-        .run(id, opts.title ?? '', opts.isSample ? 1 : 0, now, now);
+        // 저장 불변식(shared/text.ts)은 API 스키마뿐 아니라 쓰는 곳에서도 보장한다(스크립트·내부 호출이 우회하지 못하게). 정리는 멱등이다.
+        .run(id, cleanTitle(opts.title ?? ''), opts.isSample ? 1 : 0, now, now);
       const ins = this.db.prepare(
         `INSERT INTO scenes (project_id, position, text, duration_sec) VALUES (?, ?, '', ?)`,
       );
@@ -131,6 +133,13 @@ export class Store {
           }
         : null,
     }));
+    const last = this.db
+      .prepare(
+        `SELECT id, finished_at FROM render_jobs
+          WHERE project_id = ? AND status = 'done' AND video_file IS NOT NULL
+          ORDER BY finished_at DESC, rowid DESC LIMIT 1`,
+      )
+      .get(id) as { id: string; finished_at: string } | undefined;
     return {
       id: p.id,
       title: p.title,
@@ -139,6 +148,7 @@ export class Store {
       updatedAt: p.updated_at,
       scenes,
       isSample: p.is_sample === 1,
+      lastVideo: last ? { jobId: last.id, finishedAt: last.finished_at } : null,
     };
   }
 
@@ -153,8 +163,8 @@ export class Store {
       const upd = this.db.prepare(
         `UPDATE scenes SET text = ?, duration_sec = ? WHERE project_id = ? AND position = ?`,
       );
-      input.scenes.forEach((s, i) => upd.run(s.text, s.durationSec, id, i));
-      this.db.prepare(`UPDATE projects SET title = ? WHERE id = ?`).run(input.title, id);
+      input.scenes.forEach((s, i) => upd.run(cleanText(s.text), s.durationSec, id, i));
+      this.db.prepare(`UPDATE projects SET title = ? WHERE id = ?`).run(cleanTitle(input.title), id);
       this.touch(id);
     });
     tx();
@@ -286,6 +296,15 @@ export class Store {
     })();
     if (prev?.image_id) this.collectImageIfUnused(prev.image_id);
     return this.getProject(projectId);
+  }
+
+  /** 렌더에 쓸 이미지 파일의 실제 경로. 파일이 없으면 렌더가 '이미지를 읽을 수 없어요'로 실패하도록 경로만 돌려준다. */
+  imageFileForRender(imageId: string): string {
+    const row = this.db
+      .prepare(`SELECT project_id, stored_name FROM images WHERE id = ?`)
+      .get(imageId) as { project_id: string; stored_name: string } | undefined;
+    if (!row) throw notFound('이미지');
+    return this.imagePath(row.project_id, row.stored_name);
   }
 
   getImageFile(imageId: string): { path: string; mime: string } {

@@ -10,10 +10,12 @@ interface Props {
   onClose: () => void;
   onFix: (sceneIndex: number) => void;
   onFixTitle: () => void;
+  onStart: () => void;
+  starting: boolean;
 }
 
-/** 영상 만들기 전 확인. 시작 버튼은 2단계(렌더링)에서 연결한다. */
-export function ConfirmModal({ title, totalSec, durations, missing, onClose, onFix, onFixTitle }: Props) {
+/** 영상 만들기 전 확인. 빠진 항목이 있으면 시작할 수 없다(서버도 같은 검사를 한다). */
+export function ConfirmModal({ title, totalSec, durations, missing, onClose, onFix, onFixTitle, onStart, starting }: Props) {
   const hasMissing = missing.count > 0;
   return (
     <Modal labelledBy="confirm-title" onClose={onClose}>
@@ -75,21 +77,15 @@ export function ConfirmModal({ title, totalSec, durations, missing, onClose, onF
       {hasMissing ? (
         <div className="note-err">빠진 항목이 {missing.count}개 있어요. 모두 채워야 영상을 만들 수 있어요.</div>
       ) : (
-        <>
-          <div className="info-box">시작하면 생성 진행 화면으로 이동해요. 화면을 닫아도 생성은 계속돼요.</div>
-          <div className="temp-note" data-testid="stage-note">
-            임시 안내 · 영상 생성 기능은 다음 단계에서 연결돼요. 지금은 내용 점검까지만 할 수 있어요.
-          </div>
-        </>
+        <div className="info-box">시작하면 생성 진행 화면으로 이동해요. 화면을 닫아도 생성은 계속돼요.</div>
       )}
 
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-        <button className="btn btn-secondary" data-autofocus onClick={onClose}>
+        <button className="btn btn-secondary" data-autofocus onClick={onClose} disabled={starting}>
           {hasMissing ? '닫기' : '취소'}
         </button>
-        {/* 2단계 전까지는 항상 비활성. 렌더 API 가 생기면 !hasMissing 일 때만 활성화한다. */}
-        <button className="btn btn-primary" disabled title="영상 생성은 다음 단계에서 연결돼요">
-          영상 만들기 시작
+        <button className="btn btn-primary" disabled={hasMissing || starting} onClick={onStart}>
+          {starting ? '요청하는 중…' : '영상 만들기 시작'}
         </button>
       </div>
     </Modal>

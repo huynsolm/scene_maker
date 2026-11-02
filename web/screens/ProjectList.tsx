@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ProjectSummary } from '../../shared/types';
 import { api } from '../api';
 import { SampleTag, StatusBadge, Modal } from '../components';
@@ -10,6 +10,7 @@ export function ProjectList() {
   const [projects, setProjects] = useState<ProjectSummary[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const creatingRef = useRef(false);
   const [deleting, setDeleting] = useState<ProjectSummary | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const toast = useToast();
@@ -25,13 +26,15 @@ export function ProjectList() {
   useEffect(() => void load(), [load]);
 
   const create = async () => {
-    if (creating) return; // 연속 클릭으로 프로젝트가 여러 개 생기지 않게 한다
+    if (creatingRef.current) return; // 연속 클릭으로 프로젝트가 여러 개 생기지 않게 한다(ref: 같은 틱의 두 번째 클릭도 막음)
+    creatingRef.current = true;
     setCreating(true);
     try {
       const p = await api.createProject();
       navigate(`/projects/${p.id}`);
     } catch (e) {
       toast.show(e instanceof Error ? e.message : '새 프로젝트를 만들지 못했어요');
+      creatingRef.current = false;
       setCreating(false);
     }
   };
