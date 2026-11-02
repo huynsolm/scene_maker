@@ -1,9 +1,9 @@
 # 씬 메이커 (scene_maker)
 
-제목과 장면 3개(문구·이미지·길이)를 입력해 짧은 **무음 MP4 안내 영상**(1280×720, 30fps)을 만드는 웹앱. 단일 사용자, 로컬 개발 환경 기준.
+제목과 장면 1~10개(문구·이미지·길이)를 입력해 짧은 **무음 MP4 안내 영상**(1280×720, 30fps)을 만드는 웹앱. 단일 사용자, 로컬 개발 환경 기준.
 
 > 진행 상황: 1~3단계 구현 완료(저장·이미지 업로드·편집 → ffmpeg 렌더링·상태 관리·재시작 복구 → 결과 화면·실패 복구·전체 흐름 점검).
-> 검수 문서: [1단계](docs/stage1-review.md) · [2단계](docs/stage2-review.md) · [3단계](docs/stage3-review.md) · [미리보기↔영상 비교](docs/frame-comparison.md)
+> 검수 문서: [장면 수 가변 1단계](docs/scenes-stage1.md) · [1단계](docs/stage1-review.md) · [2단계](docs/stage2-review.md) · [3단계](docs/stage3-review.md) · [미리보기↔영상 비교](docs/frame-comparison.md)
 
 ## 요구 사항
 - **Node.js 22.23.4 이상, 23 미만** (`package.json` 의 `engines`, `.nvmrc` 는 최소 버전 22.23.4). 보안 패치가 포함된 최소 버전이다. 이 범위 밖에서는 `.npmrc` 의 `engine-strict` 때문에 `npm install`/`npm ci` 가 설치 초기에 중단된다.
@@ -40,7 +40,7 @@ npm run seed:sample
 ## 테스트
 ```bash
 npm run typecheck
-npm test                # 단위·API·실제 ffmpeg 테스트 121개 (Vitest). ffmpeg 가 없으면 ffmpeg 테스트는 건너뜀
+npm test                # 단위·API·실제 ffmpeg 테스트 133개 (Vitest). ffmpeg 가 없으면 ffmpeg 테스트는 건너뜀
 npm run build && npm run test:e2e   # 브라우저 E2E 37개 (Playwright). 먼저 build 필요. 전체 흐름·결과 화면·미리보기↔영상 자막 일치 포함
 npm run build && npm run compare:frame -- --out report.md   # 미리보기↔영상 자막 차이 측정
 ```

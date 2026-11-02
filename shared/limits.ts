@@ -1,11 +1,16 @@
 // 서버와 화면이 같은 규칙을 쓰도록 한 곳에 둔다. 사용자 결정 사항(1단계 계획 승인)을 그대로 옮긴 값이다.
 
-export const SCENE_COUNT = 3;
+/** 장면 수 범위와 새 프로젝트의 기본 장면 수. 렌더 시간·임시 디스크 사용량을 보호하는 상한이다. */
+export const SCENE_MIN = 1;
+export const SCENE_MAX = 10;
+export const SCENE_DEFAULT = 3;
 export const DEFAULT_TOTAL_SEC = 30;
 
 export const DURATION_MIN_SEC = 3;
 export const DURATION_MAX_SEC = 30;
 export const DURATION_DEFAULT_SEC = 10;
+/** 영상 총 길이 상한(초) = 장면 최대 수 x 장면 최대 길이. 두 한도가 이미 보장하므로 따로 검사하지 않는다. */
+export const TOTAL_MAX_SEC = SCENE_MAX * DURATION_MAX_SEC;
 export const DURATION_QUICK_PICKS = [5, 10, 15] as const;
 
 export const TITLE_MAX_LENGTH = 100;

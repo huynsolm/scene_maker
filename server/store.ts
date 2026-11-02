@@ -3,9 +3,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {
   DURATION_DEFAULT_SEC,
-  SCENE_COUNT,
+  SCENE_DEFAULT,
+  SCENE_MAX,
+  SCENE_MIN,
 } from '../shared/limits';
-import type { SaveProjectInput } from '../shared/schemas';
 import { cleanText, cleanTitle } from '../shared/text';
 import type { Project, ProjectStatus, ProjectSummary, Scene } from '../shared/types';
 import type { Db } from './db';
@@ -22,6 +23,7 @@ interface ProjectRow {
 }
 
 interface SceneRow {
+  id: string;
   position: number;
   text: string;
   duration_sec: number;
@@ -31,6 +33,15 @@ interface SceneRow {
   height: number | null;
   img_is_sample: number | null;
 }
+
+/** 저장 입력. 내부 호출은 장면 ID 를 생략할 수 있다(위치 순서로 적용). */
+export interface SaveInput {
+  title: string;
+  scenes: Array<{ id?: string; text: string; durationSec: number }>;
+}
+
+const scenesChanged = () =>
+  new AppError('SCENES_CHANGED', 409, '장면 구성이 바뀌었어요. 화면을 새로 고친 뒤 다시 시도해 주세요.');
 
 export const imageUrl = (id: string) => `/api/images/${id}/file`;
 
@@ -99,9 +110,9 @@ export class Store {
         // 저장 불변식(shared/text.ts)은 API 스키마뿐 아니라 쓰는 곳에서도 보장한다(스크립트·내부 호출이 우회하지 못하게). 정리는 멱등이다.
         .run(id, cleanTitle(opts.title ?? ''), opts.isSample ? 1 : 0, now, now);
       const ins = this.db.prepare(
-        `INSERT INTO scenes (project_id, position, text, duration_sec) VALUES (?, ?, '', ?)`,
+        `INSERT INTO scenes (id, project_id, position, text, duration_sec) VALUES (?, ?, ?, '', ?)`,
       );
-      for (let i = 0; i < SCENE_COUNT; i++) ins.run(id, i, DURATION_DEFAULT_SEC);
+      for (let i = 0; i < SCENE_DEFAULT; i++) ins.run(crypto.randomUUID(), id, i, DURATION_DEFAULT_SEC);
     });
     tx();
     return this.getProject(id);
@@ -112,13 +123,14 @@ export class Store {
     if (!p) throw notFound();
     const rows = this.db
       .prepare(
-        `SELECT s.position, s.text, s.duration_sec, s.image_id,
+        `SELECT s.id, s.position, s.text, s.duration_sec, s.image_id,
                 i.file_name, i.width, i.height, i.is_sample AS img_is_sample
            FROM scenes s LEFT JOIN images i ON i.id = s.image_id
           WHERE s.project_id = ? ORDER BY s.position`,
       )
       .all(id) as SceneRow[];
     const scenes: Scene[] = rows.map((r) => ({
+      id: r.id,
       position: r.position,
       text: r.text,
       durationSec: r.duration_sec,
@@ -156,19 +168,87 @@ export class Store {
    * 제목과 장면 내용을 저장한다. 완료/실패 상태의 프로젝트를 고치면 '편집 중'으로 돌아간다.
    * 대기/생성 중에는 상태를 건드리지 않는다. 진행 중인 작업은 요청 시점 스냅샷을 쓰므로
    * 지금 저장하는 내용은 다음 생성부터 반영된다.
+   *
+   * 장면 ID 를 보내면 서버의 현재 장면 목록(순서 포함)과 같아야 한다. 다르면 SCENES_CHANGED(409)로 거절한다 —
+   * 장면을 추가·삭제하기 전에 보낸 오래된 저장이 삭제된 장면을 되살리거나 엉뚱한 장면을 덮어쓰지 못하게 한다.
+   * ID 없이 보내면(내부 호출·하위 호환) 현재 장면 수와 같을 때 위치 순서대로 적용한다.
    */
-  saveProject(id: string, input: SaveProjectInput): Project {
+  saveProject(id: string, input: SaveInput): Project {
     const tx = this.db.transaction(() => {
       this.requireProject(id);
-      const upd = this.db.prepare(
-        `UPDATE scenes SET text = ?, duration_sec = ? WHERE project_id = ? AND position = ?`,
-      );
-      input.scenes.forEach((s, i) => upd.run(cleanText(s.text), s.durationSec, id, i));
+      const current = this.sceneIds(id);
+      const sent = input.scenes.map((s) => s.id);
+      if (sent.every((x) => x)) {
+        if (sent.length !== current.length || sent.some((x, i) => x !== current[i])) throw scenesChanged();
+      } else if (sent.some((x) => x) || input.scenes.length !== current.length) {
+        throw scenesChanged();
+      }
+      const upd = this.db.prepare(`UPDATE scenes SET text = ?, duration_sec = ? WHERE id = ?`);
+      input.scenes.forEach((s, i) => upd.run(cleanText(s.text), s.durationSec, current[i]));
       this.db.prepare(`UPDATE projects SET title = ? WHERE id = ?`).run(cleanTitle(input.title), id);
       this.touch(id);
     });
     tx();
     return this.getProject(id);
+  }
+
+  private sceneIds(projectId: string): string[] {
+    return (
+      this.db.prepare(`SELECT id FROM scenes WHERE project_id = ? ORDER BY position`).all(projectId) as Array<{ id: string }>
+    ).map((r) => r.id);
+  }
+
+  /** 맨 뒤에 빈 장면을 하나 더한다. 장면 수 상한을 넘으면 거절한다. */
+  addScene(projectId: string): Project {
+    this.db.transaction(() => {
+      this.requireProject(projectId);
+      const row = this.db
+        .prepare(`SELECT COUNT(*) AS n FROM scenes WHERE project_id = ?`)
+        .get(projectId) as { n: number };
+      if (row.n >= SCENE_MAX) {
+        throw new AppError('SCENE_LIMIT', 422, `장면은 최대 ${SCENE_MAX}개까지 만들 수 있어요.`);
+      }
+      this.db
+        .prepare(`INSERT INTO scenes (id, project_id, position, text, duration_sec) VALUES (?, ?, ?, '', ?)`)
+        .run(crypto.randomUUID(), projectId, row.n, DURATION_DEFAULT_SEC);
+      this.touch(projectId);
+    })();
+    return this.getProject(projectId);
+  }
+
+  /** 장면을 지우고 뒤 장면의 순서를 당긴다. 마지막 한 장면은 지울 수 없다. 이미지는 어디에서도 쓰지 않을 때만 정리한다. */
+  deleteScene(projectId: string, sceneId: string): Project {
+    let imageId: string | null = null;
+    this.db.transaction(() => {
+      this.requireProject(projectId);
+      const ids = this.sceneIds(projectId);
+      const idx = ids.indexOf(sceneId);
+      if (idx < 0) throw notFound('장면');
+      if (ids.length <= SCENE_MIN) {
+        throw new AppError('SCENE_MIN', 422, `장면은 최소 ${SCENE_MIN}개가 있어야 해요.`);
+      }
+      imageId = (
+        this.db.prepare(`SELECT image_id FROM scenes WHERE id = ?`).get(sceneId) as { image_id: string | null }
+      ).image_id;
+      this.db.prepare(`DELETE FROM scenes WHERE id = ?`).run(sceneId);
+      const upd = this.db.prepare(`UPDATE scenes SET position = ? WHERE id = ?`);
+      ids.filter((x) => x !== sceneId).forEach((x, i) => upd.run(i, x));
+      this.touch(projectId);
+    })();
+    if (imageId) this.collectImageIfUnused(imageId);
+    return this.getProject(projectId);
+  }
+
+  private sceneIdAt(projectId: string, position: number): string {
+    const id = this.sceneIds(projectId)[position];
+    if (!Number.isInteger(position) || !id) throw notFound('장면');
+    return id;
+  }
+
+  private requireScene(projectId: string, sceneId: string) {
+    if (!this.db.prepare(`SELECT 1 FROM scenes WHERE id = ? AND project_id = ?`).get(sceneId, projectId)) {
+      throw notFound('장면');
+    }
   }
 
   /** 변경 시각을 갱신하고 완료/실패였다면 편집 중으로 되돌린다. */
@@ -220,15 +300,15 @@ export class Store {
    */
   attachImage(
     projectId: string,
-    position: number,
+    scene: string | number,
     buf: Buffer,
     originalName: string | undefined,
     opts: { isSample?: boolean } = {},
   ): Project {
     this.requireProject(projectId);
-    if (!Number.isInteger(position) || position < 0 || position >= SCENE_COUNT) {
-      throw new AppError('INVALID_INPUT', 400, '장면 번호가 올바르지 않아요.');
-    }
+    // 숫자는 위치(0부터)로 장면을 찾는 내부 호출용(시드·테스트). HTTP 경로는 항상 장면 ID 를 쓴다.
+    const sceneId = typeof scene === 'number' ? this.sceneIdAt(projectId, scene) : scene;
+    this.requireScene(projectId, sceneId);
     const info = inspectImage(buf);
     const imageId = crypto.randomUUID();
     const storedName = `${imageId}.${info.ext}`;
@@ -244,8 +324,9 @@ export class Store {
       fs.renameSync(tmpPath, finalPath);
       const tx = this.db.transaction(() => {
         const prev = this.db
-          .prepare(`SELECT image_id FROM scenes WHERE project_id = ? AND position = ?`)
-          .get(projectId, position) as { image_id: string | null } | undefined;
+          .prepare(`SELECT image_id FROM scenes WHERE id = ? AND project_id = ?`)
+          .get(sceneId, projectId) as { image_id: string | null } | undefined;
+        if (!prev) throw notFound('장면'); // 파일을 쓰는 사이 장면이 지워진 경우
         previousId = prev?.image_id ?? null;
         this.db
           .prepare(
@@ -265,8 +346,8 @@ export class Store {
             new Date().toISOString(),
           );
         this.db
-          .prepare(`UPDATE scenes SET image_id = ? WHERE project_id = ? AND position = ?`)
-          .run(imageId, projectId, position);
+          .prepare(`UPDATE scenes SET image_id = ? WHERE id = ? AND project_id = ?`)
+          .run(imageId, sceneId, projectId);
         this.touch(projectId);
       });
       tx();
@@ -280,18 +361,14 @@ export class Store {
     return this.getProject(projectId);
   }
 
-  removeImage(projectId: string, position: number): Project {
+  removeImage(projectId: string, sceneId: string): Project {
     this.requireProject(projectId);
-    if (!Number.isInteger(position) || position < 0 || position >= SCENE_COUNT) {
-      throw new AppError('INVALID_INPUT', 400, '장면 번호가 올바르지 않아요.');
-    }
+    this.requireScene(projectId, sceneId);
     const prev = this.db
-      .prepare(`SELECT image_id FROM scenes WHERE project_id = ? AND position = ?`)
-      .get(projectId, position) as { image_id: string | null } | undefined;
+      .prepare(`SELECT image_id FROM scenes WHERE id = ? AND project_id = ?`)
+      .get(sceneId, projectId) as { image_id: string | null } | undefined;
     this.db.transaction(() => {
-      this.db
-        .prepare(`UPDATE scenes SET image_id = NULL WHERE project_id = ? AND position = ?`)
-        .run(projectId, position);
+      this.db.prepare(`UPDATE scenes SET image_id = NULL WHERE id = ? AND project_id = ?`).run(sceneId, projectId);
       this.touch(projectId);
     })();
     if (prev?.image_id) this.collectImageIfUnused(prev.image_id);

@@ -3,12 +3,12 @@ import {
   DEFAULT_TOTAL_SEC,
   TEXT_MAX_LENGTH,
   TITLE_MAX_LENGTH,
+  SCENE_MAX,
   DURATION_MAX_SEC,
   DURATION_MIN_SEC,
   DURATION_QUICK_PICKS,
   IMAGE_ACCEPT,
   IMAGE_LABEL,
-  SCENE_COUNT,
   SUBTITLE,
   TEXT_RECOMMENDED_LENGTH,
   VIDEO,
@@ -31,7 +31,7 @@ export function Editor({ projectId }: { projectId: string }) {
   // 결과 화면의 "장면 N 편집에서 확인하기" 같은 링크(?scene=N)로 들어오면 그 장면을 먼저 보여준다.
   const [sel, setSel] = useState(() => {
     const n = Number(new URLSearchParams(window.location.search).get('scene'));
-    return Number.isInteger(n) && n >= 1 && n <= SCENE_COUNT ? n - 1 : 0;
+    return Number.isInteger(n) && n >= 1 && n <= SCENE_MAX ? n - 1 : 0;
   });
   const [guides, setGuides] = useState(true);
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -322,10 +322,10 @@ export function Editor({ projectId }: { projectId: string }) {
                   {mmss(t)} / {mmss(dur)}
                 </span>
                 <div style={{ display: 'flex', gap: 4 }}>
-                  <button className="btn btn-secondary btn-sm" style={{ height: 34 }} onClick={() => select((sel + SCENE_COUNT - 1) % SCENE_COUNT)}>
+                  <button className="btn btn-secondary btn-sm" style={{ height: 34 }} onClick={() => select((sel + scenes.length - 1) % scenes.length)}>
                     이전 장면
                   </button>
-                  <button className="btn btn-secondary btn-sm" style={{ height: 34 }} onClick={() => select((sel + 1) % SCENE_COUNT)}>
+                  <button className="btn btn-secondary btn-sm" style={{ height: 34 }} onClick={() => select((sel + 1) % scenes.length)}>
                     다음 장면
                   </button>
                 </div>
@@ -409,7 +409,7 @@ export function Editor({ projectId }: { projectId: string }) {
           </div>
 
           <div style={{ marginTop: 'auto', paddingTop: 16, borderTop: '1px solid var(--divider)' }}>
-            {sel < SCENE_COUNT - 1 ? (
+            {sel < scenes.length - 1 ? (
               <button className="btn btn-soft" style={{ width: '100%', height: 42 }} onClick={() => select(sel + 1)}>
                 다음: 장면 {sel + 2} 편집 →
               </button>

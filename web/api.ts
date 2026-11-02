@@ -44,7 +44,8 @@ async function request<T>(method: string, url: string, body?: BodyInit | object)
 
 export interface SaveBody {
   title: string;
-  scenes: Array<{ text: string; durationSec: number }>;
+  /** id 는 서버의 장면 ID. 보내면 서버의 현재 장면 구성과 같을 때만 저장된다. */
+  scenes: Array<{ id?: string; text: string; durationSec: number }>;
 }
 
 export const api = {
@@ -60,13 +61,13 @@ export const api = {
     request<{ job: RenderJobView }>('GET', `/api/projects/${projectId}/renders/${jobId}`).then((r) => r.job),
   latestRender: (id: string) =>
     request<{ job: RenderJobView | null }>('GET', `/api/projects/${id}/renders/latest`).then((r) => r.job),
-  uploadImage: (id: string, position: number, file: File) => {
+  uploadImage: (id: string, sceneId: string, file: File) => {
     const form = new FormData();
     form.append('file', file);
-    return request<{ project: Project }>('POST', `/api/projects/${id}/scenes/${position}/image`, form).then(
+    return request<{ project: Project }>('POST', `/api/projects/${id}/scenes/${sceneId}/image`, form).then(
       (r) => r.project,
     );
   },
-  removeImage: (id: string, position: number) =>
-    request<{ project: Project }>('DELETE', `/api/projects/${id}/scenes/${position}/image`).then((r) => r.project),
+  removeImage: (id: string, sceneId: string) =>
+    request<{ project: Project }>('DELETE', `/api/projects/${id}/scenes/${sceneId}/image`).then((r) => r.project),
 };

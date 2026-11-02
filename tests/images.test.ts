@@ -80,8 +80,9 @@ describe('이미지 업로드 검증', () => {
   it('빈 파일과 파일 없는 요청, 잘못된 장면 번호를 거부한다', async () => {
     const { app, projectId } = await setup();
     expect((await upload(app, projectId, 0, Buffer.alloc(0))).statusCode).toBe(400);
-    expect((await upload(app, projectId, 3, solidPng(8, 8, [0, 0, 0]))).statusCode).toBe(400);
-    expect((await upload(app, projectId, -1, solidPng(8, 8, [0, 0, 0]))).statusCode).toBe(400);
+    // 존재하지 않는 장면은 404(장면은 번호가 아니라 ID 로 지정한다)
+    expect((await upload(app, projectId, 3, solidPng(8, 8, [0, 0, 0]))).statusCode).toBe(404);
+    expect((await upload(app, projectId, -1, solidPng(8, 8, [0, 0, 0]))).statusCode).toBe(404);
   });
 
   it('경로를 담은 파일명은 표시용 이름만 남기고 저장 경로에 영향을 주지 않는다', async () => {
@@ -125,7 +126,8 @@ describe('이미지 정리', () => {
     ).run(projectId);
     db.prepare(`INSERT INTO render_job_images (job_id, image_id) VALUES ('j1', ?)`).run(img.id);
 
-    const res = await app.inject({ method: 'DELETE', url: `/api/projects/${projectId}/scenes/0/image` });
+    const sceneId = (await app.inject({ url: `/api/projects/${projectId}` })).json().project.scenes[0].id;
+    const res = await app.inject({ method: 'DELETE', url: `/api/projects/${projectId}/scenes/${sceneId}/image` });
     expect(res.json().project.scenes[0].image).toBeNull();
     expect(filesIn(dataDir, projectId)).toHaveLength(1); // 렌더 작업이 쓰므로 보존
     expect((await app.inject({ url: img.url })).statusCode).toBe(200);
@@ -134,7 +136,8 @@ describe('이미지 정리', () => {
   it('렌더 작업이 없으면 삭제 즉시 파일도 지운다', async () => {
     const { app, projectId, dataDir } = await setup();
     await upload(app, projectId, 1, solidPng(16, 9, [1, 1, 1]));
-    await app.inject({ method: 'DELETE', url: `/api/projects/${projectId}/scenes/1/image` });
+    const sceneId = (await app.inject({ url: `/api/projects/${projectId}` })).json().project.scenes[1].id;
+    await app.inject({ method: 'DELETE', url: `/api/projects/${projectId}/scenes/${sceneId}/image` });
     expect(filesIn(dataDir, projectId)).toEqual([]);
   });
 

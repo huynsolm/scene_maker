@@ -56,7 +56,7 @@ export function useProjectEditor(id: string, onToast: (msg: string) => void) {
       if (!alive.current) return;
       const d: SaveBody = {
         title: p.title,
-        scenes: p.scenes.map((s) => ({ text: s.text, durationSec: s.durationSec })),
+        scenes: p.scenes.map((s) => ({ id: s.id, text: s.text, durationSec: s.durationSec })),
       };
       draftRef.current = d;
       version.current = 0;
@@ -112,7 +112,7 @@ export function useProjectEditor(id: string, onToast: (msg: string) => void) {
         // 들어온 보이지 않는 문자가 화면에는 남고 저장값에서는 사라져 "저장됨"인데 둘이 다른 상태가 되지 않도록,
         // 그 사이 더 고친 것이 없으면 정리된 값으로 draft 를 맞춘다(version 은 올리지 않으므로 다시 저장하지 않는다).
         // IME 조합 중에는 입력칸의 값을 바꾸면 조합이 깨지므로 응답을 보관했다가 조합이 끝난 뒤 반영한다(setComposing).
-        const saved: SaveBody = { title: p.title, scenes: p.scenes.map((s) => ({ text: s.text, durationSec: s.durationSec })) };
+        const saved: SaveBody = { title: p.title, scenes: p.scenes.map((s) => ({ id: s.id, text: s.text, durationSec: s.durationSec })) };
         if (composing.current) pendingSync.current = { version: sentVersion, body: saved };
         else {
           pendingSync.current = null;
@@ -202,7 +202,7 @@ export function useProjectEditor(id: string, onToast: (msg: string) => void) {
     }
     setUploading(position);
     try {
-      applyImages(await api.uploadImage(id, position, file));
+      applyImages(await api.uploadImage(id, draftRef.current!.scenes[position]!.id!, file));
     } catch (e) {
       onToast(e instanceof Error ? e.message : '이미지를 올리지 못했어요');
     } finally {
@@ -212,7 +212,7 @@ export function useProjectEditor(id: string, onToast: (msg: string) => void) {
 
   const removeImage = async (position: number) => {
     try {
-      applyImages(await api.removeImage(id, position));
+      applyImages(await api.removeImage(id, draftRef.current!.scenes[position]!.id!));
     } catch (e) {
       onToast(e instanceof Error ? e.message : '이미지를 지우지 못했어요');
     }

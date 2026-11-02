@@ -10,7 +10,8 @@ export interface SceneImage {
 }
 
 export interface Scene {
-  position: number; // 0..2
+  id: string;
+  position: number; // 0부터, 장면 순서
   text: string;
   durationSec: number;
   image: SceneImage | null;

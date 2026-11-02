@@ -148,7 +148,7 @@ describe('결과 화면', () => {
     // 3번 장면을 머리만 정상인 깨진 PNG 로 바꾼다
     const form = new FormData();
     form.append('file', new Blob([new Uint8Array(solidPng(1280, 720, [9, 9, 9]).subarray(0, 120))], { type: 'image/png' }), 'broken.png');
-    expect((await fetch(`${env.base}/api/projects/${p.id}/scenes/2/image`, { method: 'POST', body: form })).status).toBe(200);
+    expect((await fetch(`${env.base}/api/projects/${p.id}/scenes/${env.store.getProject(p.id).scenes[2]!.id}/image`, { method: 'POST', body: form })).status).toBe(200);
 
     const page = await env.newPage();
     await page.goto(`${env.base}/projects/${p.id}`);
@@ -216,7 +216,7 @@ describe('결과 화면', () => {
       // 실패 화면(오류 문구가 긴 경우)도 확인: 깨진 이미지로 한 번 더 요청
       const form = new FormData();
       form.append('file', new Blob([new Uint8Array(solidPng(1280, 720, [9, 9, 9]).subarray(0, 120))], { type: 'image/png' }), 'broken.png');
-      await fetch(`${env.base}/api/projects/${p.id}/scenes/1/image`, { method: 'POST', body: form });
+      await fetch(`${env.base}/api/projects/${p.id}/scenes/${env.store.getProject(p.id).scenes[1]!.id}/image`, { method: 'POST', body: form });
       await fetch(`${env.base}/api/projects/${p.id}/renders`, { method: 'POST' });
       await page.goto(`${env.base}/projects/${p.id}/result`);
       await eventually(async () => (await status(page)) === 'failed', '실패', 60_000);

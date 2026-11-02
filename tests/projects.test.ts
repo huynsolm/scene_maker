@@ -97,11 +97,13 @@ describe('장면 길이 · 입력 검증', () => {
     expect(res.statusCode).toBe(200);
   });
 
-  it('장면이 3개가 아니거나 글자 수·제목이 한도를 넘으면 거부한다', async () => {
+  it('장면 수·총 길이·글자 수·제목이 한도를 넘으면 거부한다', async () => {
     const { app } = await setup();
     const { project } = (await app.inject({ method: 'POST', url: '/api/projects' })).json();
     const put = (payload: unknown) => app.inject({ method: 'PUT', url: `/api/projects/${project.id}`, payload: payload as object });
-    expect((await put(validSave({ scenes: [{ text: 'a', durationSec: 10 }] }))).statusCode).toBe(400);
+    expect((await put(validSave({ scenes: [] }))).statusCode).toBe(400); // 최소 1개
+    expect((await put(validSave({ scenes: Array(11).fill({ text: 'a', durationSec: 3 }) }))).statusCode).toBe(400); // 최대 10개
+    expect((await put(validSave({ scenes: Array(4).fill({ text: 'a', durationSec: 3 }) }))).statusCode).toBe(409); // ID 없이 보내면 현재 장면 수(3)와 같아야 한다
     expect((await put(validSave({ title: 'a'.repeat(101) }))).statusCode).toBe(400);
     expect(
       (await put(validSave({ scenes: Array(3).fill({ text: 'a'.repeat(201), durationSec: 10 }) }))).statusCode,

@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -31,14 +32,17 @@ CREATE TABLE IF NOT EXISTS images (
   created_at   TEXT NOT NULL
 );
 
+-- 장면은 고유 ID 로 식별한다(이미지·삭제·저장이 순서 번호에 기대면 중간 장면을 지울 때 엉뚱한 장면에 반영될 수 있다).
+-- position 은 표시 순서이며 코드가 트랜잭션 안에서 0..n-1 로 유지한다(유니크 제약을 두면 한 칸씩 당길 때 일시적으로 충돌한다).
 CREATE TABLE IF NOT EXISTS scenes (
+  id            TEXT PRIMARY KEY,
   project_id    TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-  position      INTEGER NOT NULL CHECK (position BETWEEN 0 AND 2),
+  position      INTEGER NOT NULL CHECK (position >= 0),
   text          TEXT NOT NULL DEFAULT '',
   duration_sec  INTEGER NOT NULL CHECK (duration_sec BETWEEN 3 AND 30),
-  image_id      TEXT REFERENCES images(id) ON DELETE SET NULL,
-  PRIMARY KEY (project_id, position)
+  image_id      TEXT REFERENCES images(id) ON DELETE SET NULL
 );
+CREATE INDEX IF NOT EXISTS scenes_by_project ON scenes(project_id, position);
 
 CREATE TABLE IF NOT EXISTS render_jobs (
   id             TEXT PRIMARY KEY,
@@ -78,8 +82,40 @@ export function openDb(dataDir: string): Db {
 
 /** 이전 단계에서 만든 DB(렌더 작업 컬럼이 모자란 상태)를 현재 스키마로 올린다. */
 function migrate(db: Db) {
+  migrateScenes(db);
   const cols = (db.prepare(`PRAGMA table_info(render_jobs)`).all() as Array<{ name: string }>).map((c) => c.name);
   if (!cols.includes('step')) db.exec(`ALTER TABLE render_jobs ADD COLUMN step INTEGER NOT NULL DEFAULT 1`);
   if (!cols.includes('error_detail')) db.exec(`ALTER TABLE render_jobs ADD COLUMN error_detail TEXT`);
   if (!cols.includes('error_scene')) db.exec(`ALTER TABLE render_jobs ADD COLUMN error_scene INTEGER`);
+}
+
+/**
+ * 장면 3개 고정 시절의 scenes 표(PRIMARY KEY (project_id, position), position 0..2 CHECK)를 장면 ID 가 있는 표로 옮긴다.
+ * 행 수와 내용(문구, 길이, 이미지 연결, 순서)은 그대로이고 ID 만 새로 붙는다. 한 트랜잭션이라 실패하면 이전 표가 그대로 남는다.
+ * scenes 를 참조하는 표는 없으므로 foreign_keys 를 끌 필요가 없다.
+ */
+function migrateScenes(db: Db) {
+  const cols = (db.prepare(`PRAGMA table_info(scenes)`).all() as Array<{ name: string }>).map((c) => c.name);
+  if (cols.includes('id')) return;
+  const rows = db
+    .prepare(`SELECT project_id, position, text, duration_sec, image_id FROM scenes ORDER BY project_id, position`)
+    .all() as Array<{ project_id: string; position: number; text: string; duration_sec: number; image_id: string | null }>;
+  db.transaction(() => {
+    db.exec(`ALTER TABLE scenes RENAME TO scenes_old`);
+    db.exec(`DROP INDEX IF EXISTS scenes_by_project`);
+    db.exec(`CREATE TABLE scenes (
+      id            TEXT PRIMARY KEY,
+      project_id    TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      position      INTEGER NOT NULL CHECK (position >= 0),
+      text          TEXT NOT NULL DEFAULT '',
+      duration_sec  INTEGER NOT NULL CHECK (duration_sec BETWEEN 3 AND 30),
+      image_id      TEXT REFERENCES images(id) ON DELETE SET NULL
+    )`);
+    db.exec(`CREATE INDEX scenes_by_project ON scenes(project_id, position)`);
+    const ins = db.prepare(
+      `INSERT INTO scenes (id, project_id, position, text, duration_sec, image_id) VALUES (?, ?, ?, ?, ?, ?)`,
+    );
+    for (const r of rows) ins.run(crypto.randomUUID(), r.project_id, r.position, r.text, r.duration_sec, r.image_id);
+    db.exec(`DROP TABLE scenes_old`);
+  })();
 }
