@@ -59,10 +59,24 @@ export class FfmpegRenderer implements Renderer {
     fs.mkdirSync(workDir, { recursive: true });
     hooks.onStep(2);
 
-    // 1) 이미지를 장면별로 먼저 한 번씩 디코딩해 본다. 실패하면 몇 번째 장면인지 알 수 있다.
+    const { width, height, fps } = VIDEO;
+
+    // 1) 이미지를 장면별로 **한 번만** 디코딩해 프레임 크기(가로세로를 채우도록 확대한 뒤 가운데를 자름, RGBA)로 줄여 작업 폴더에 둔다.
+    //    실패하면 몇 번째 장면인지 알 수 있다. 본 렌더가 `-loop 1` 로 읽는 입력은 이 파일이다. 원본을 그대로 `-loop 1` 로 읽으면
+    //    프레임마다 원본을 다시 디코딩해서(4096x4096 사진은 프레임당 약 0.23초) 큰 사진이 몇 배에서 십수 배 느려지고 메모리도 커진다.
+    //    줄이는 필터는 예전에 본 렌더의 필터 그래프 안에서 하던 것과 같고 무손실(PNG)로 저장하므로 결과 영상은 같다.
+    const frameFile = (i: number) => `frame${i}.png`;
     for (const [i, s] of scenes.entries()) {
       try {
-        await run(ffmpegPath, ['-hide_banner', '-nostdin', '-v', 'error', '-i', s.imagePath, '-frames:v', '1', '-f', 'null', '-'], base);
+        await run(
+          ffmpegPath,
+          [
+            '-hide_banner', '-nostdin', '-y', '-v', 'error', '-i', s.imagePath,
+            '-vf', `format=rgba,scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},setsar=1`,
+            '-frames:v', '1', frameFile(i),
+          ],
+          base,
+        );
       } catch (e) {
         if (e instanceof RenderError && e.code === 'RENDER_FAILED') throw imageDecodeFailed(i + 1, e.detail);
         throw e;
@@ -77,11 +91,12 @@ export class FfmpegRenderer implements Renderer {
       fs.writeFileSync(path.join(workDir, `s${i}.ass`), buildAss(s.text, s.durationSec, measurer), 'utf8');
     });
 
-    const { width, height, fps } = VIDEO;
     const fonts = escapeFilterValue(fontsDir);
-    const inputs = scenes.flatMap((s, i) => ['-loop', '1', '-framerate', String(fps), '-t', String(s.durationSec), '-i', scenes[i]!.imagePath]);
+    const inputs = scenes.flatMap((s, i) => ['-loop', '1', '-framerate', String(fps), '-t', String(s.durationSec), '-i', frameFile(i)]);
     // 이미지는 프레임 배경색 위에 올린다. 투명 PNG 의 투명 영역(과 그 아래 숨은 색)이 그대로 비치지 않고,
     // 미리보기(어두운 프레임 배경 위에 이미지)와 같게 보이도록 하기 위해서다. 불투명 이미지는 결과가 같다.
+    // 입력(frame<i>.png)은 이미 프레임 크기로 줄여 둔 것이라 아래 scale/crop 은 크기가 같아 사실상 통과한다. 필터 그래프를
+    // 예전과 같게 두어 결과가 같음을 바이트 단위로 확인했다.
     const chains = scenes.map(
       (s, i) =>
         `color=c=0x${VIDEO.background}:s=${width}x${height}:r=${fps}:d=${s.durationSec}[bg${i}];` +
