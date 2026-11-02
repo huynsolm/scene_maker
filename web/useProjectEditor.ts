@@ -42,8 +42,8 @@ export function useProjectEditor(id: string, onToast: (msg: string) => void) {
   const draftRef = useRef<SaveBody | null>(null);
   const version = useRef(0); // 편집할 때마다 증가
   const savedVersion = useRef(0); // 서버에 반영이 확인된 마지막 버전
-  const inFlight = useRef(false);
-  const inFlightDone = useRef<Promise<boolean>>(Promise.resolve(true));
+  // 진행 중인 저장 작업(세대별). 새로 불러오면 이전 세대의 작업은 응답이 무시되므로, 새 세대의 저장은 그 작업을 기다리지 않고 따로 시작한다.
+  const inFlight = useRef<{ gen: number; done: Promise<boolean> } | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const alive = useRef(true);
   const saveFailedRef = useRef(false);
@@ -62,6 +62,9 @@ export function useProjectEditor(id: string, onToast: (msg: string) => void) {
     queue.current = run.catch(() => undefined);
     return run;
   };
+  /** 줄 서 있다가 차례가 왔을 때 화면이 이미 새로 불러와졌다면(세대가 다르면) 요청을 보내지 않고 null 을 돌려준다. */
+  const enqueueFor = <T,>(gen: number, fn: () => Promise<T>): Promise<T | null> =>
+    enqueue(async () => (gen !== loadGen.current ? null : fn()));
   // 화면을 새로 불러올 때마다 올린다. 이전 세대에서 시작한 요청의 응답(성공이든 실패든)은 새 화면에 반영하지 않는다.
   const loadGen = useRef(0);
 
@@ -69,6 +72,9 @@ export function useProjectEditor(id: string, onToast: (msg: string) => void) {
     const gen = ++loadGen.current;
     setLoadState('loading');
     try {
+      // 이미 서버로 나간 이미지·장면 요청은 끝나기를 기다린 뒤 읽는다(그래야 읽은 내용에 그 결과가 들어 있다).
+      // 아직 나가지 않고 줄 서 있던 요청은 세대가 달라져서 실행되지 않는다(enqueueFor).
+      await queue.current;
       const p = await api.getProject(id);
       if (!alive.current || gen !== loadGen.current) return;
       const d: SaveBody = {
@@ -158,21 +164,24 @@ export function useProjectEditor(id: string, onToast: (msg: string) => void) {
    * 최신 내용을 이어서 보낸다. 이미 진행 중이면 그 작업이 끝나기를 기다린다. 실패하면 false(draft 는 그대로).
    */
   const flush = useCallback((): Promise<boolean> => {
-    if (inFlight.current) return inFlightDone.current;
+    const running = inFlight.current;
+    if (running && running.gen === loadGen.current) return running.done;
     if (!draftRef.current || version.current === savedVersion.current) return Promise.resolve(true);
-    inFlight.current = true;
-    inFlightDone.current = (async () => {
+    const gen = loadGen.current;
+    const entry: { gen: number; done: Promise<boolean> } = { gen, done: Promise.resolve(true) };
+    inFlight.current = entry; // 비동기 본문이 await 없이 끝나도 finally 가 이 항목을 지울 수 있게 먼저 등록한다
+    entry.done = (async () => {
       try {
         if (structural.current) await structural.current.catch(() => undefined); // 장면 목록이 바뀌는 중이면 끝난 뒤 새 ID 로 보낸다
-        while (alive.current && version.current !== savedVersion.current) {
+        while (alive.current && gen === loadGen.current && version.current !== savedVersion.current) {
           if (!(await send())) return false;
         }
         return true;
       } finally {
-        inFlight.current = false;
+        if (inFlight.current === entry) inFlight.current = null;
       }
     })();
-    return inFlightDone.current;
+    return entry.done;
   }, [send]);
 
   /**
@@ -230,8 +239,8 @@ export function useProjectEditor(id: string, onToast: (msg: string) => void) {
     const gen = loadGen.current;
     setUploading(sceneId);
     try {
-      const p = await enqueue(() => api.uploadImage(id, sceneId, file));
-      if (gen === loadGen.current) applyImages(p);
+      const p = await enqueueFor(gen, () => api.uploadImage(id, sceneId, file));
+      if (p && gen === loadGen.current) applyImages(p);
     } catch (e) {
       if (gen === loadGen.current) onToast(e instanceof Error ? e.message : '이미지를 올리지 못했어요');
     } finally {
@@ -243,8 +252,8 @@ export function useProjectEditor(id: string, onToast: (msg: string) => void) {
     const sceneId = draftRef.current!.scenes[position]!.id!;
     const gen = loadGen.current;
     try {
-      const p = await enqueue(() => api.removeImage(id, sceneId));
-      if (gen === loadGen.current) applyImages(p);
+      const p = await enqueueFor(gen, () => api.removeImage(id, sceneId));
+      if (p && gen === loadGen.current) applyImages(p);
     } catch (e) {
       if (gen === loadGen.current) onToast(e instanceof Error ? e.message : '이미지를 지우지 못했어요');
     }

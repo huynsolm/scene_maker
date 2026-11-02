@@ -412,9 +412,50 @@ describe('1단계 화면 흐름', () => {
       await eventually(async () => inFlight === 1, '늦은 저장 요청이 나감');
       await b.getByRole('button', { name: '새로 불러오기' }).click();
       await eventually(async () => (await b.getByTestId('scenes-conflict').count()) === 0 && (await cards(b).count()) === 2, '새로 불러옴');
+      // 늦은 409 가 도착하기 전에(이전 저장이 아직 진행 중일 때) 새 화면에서 입력한다. 이 입력도 저장되어야 한다.
+      await b.locator('#scene-text').fill('새로 불러온 뒤 입력');
       await new Promise((r) => setTimeout(r, 3500)); // 늦은 409 가 도착할 시간
       expect(await b.getByTestId('scenes-conflict').count()).toBe(0);
-      expect(await b.getByTestId('save-state').innerText()).toContain('저장됨');
+      await eventually(hasText(b, SAVE, '저장됨'), '새 입력이 저장됨(멈추지 않음)', 10000);
+      const after = await fetch(`${env.base}/api/projects/${id}`).then((r) => r.json());
+      expect(after.project.scenes[0].text).toBe('새로 불러온 뒤 입력');
+      await a.close();
+      await b.close();
+    });
+
+    it('새로 불러오기 전에 줄 서 있던 이미지 요청은 새로 불러온 뒤 실행되지 않는다', async () => {
+      const p = completeProject('줄 선 요청');
+      const a = await env.newPage();
+      await a.goto(`${env.base}/projects/${p.id}`);
+      await a.getByLabel('영상 제목').waitFor();
+      const b = await env.newPage();
+      await b.goto(`${env.base}/projects/${p.id}`);
+      await b.getByLabel('영상 제목').waitFor();
+      // a 에서 장면 3을 지워 b 를 오래된 화면으로 만든다
+      await a.locator('[data-testid=scene-card-2]').click();
+      await a.getByTestId('delete-scene').click();
+      await a.getByTestId('confirm-delete-scene').click();
+      await eventually(async () => (await cards(a).count()) === 2, 'a: 장면 2개');
+      await b.locator('#scene-text').fill('충돌 유발');
+      await eventually(async () => (await b.getByTestId('scenes-conflict').count()) === 1, '충돌 안내');
+      // b: 장면 1의 이미지를 바꾸는 업로드가 나간 뒤(요청이 서버에 닿는 데 3초 걸린다), 장면 2의 이미지 삭제를 줄 세운다
+      await b.route(/\/api\/projects\/[^/]+\/scenes\/[^/]+\/image$/, async (route) => {
+        if (route.request().method() === 'POST') await new Promise((r) => setTimeout(r, 3000));
+        await route.continue();
+      });
+      await b.getByTestId('file-input').setInputFiles(tmp('queued.png', solidPng(320, 180, [10, 10, 250])));
+      await b.locator('[data-testid=scene-card-1]').click();
+      await b.getByRole('button', { name: '삭제', exact: true }).click(); // 이미지 삭제(장면 삭제 버튼은 'delete-scene')
+      await b.getByRole('button', { name: '새로 불러오기' }).click();
+      await new Promise((r) => setTimeout(r, 4500)); // 업로드가 끝나고 줄 선 삭제가 (실행된다면) 실행될 시간
+      await eventually(async () => (await cards(b).count()) === 2, 'b: 새로 불러옴');
+      const server = await fetch(`${env.base}/api/projects/${p.id}`).then((r) => r.json());
+      expect(server.project.scenes[1].image).not.toBeNull(); // 줄 서 있던 삭제는 실행되지 않았다
+      const shown = await b.locator('[data-testid=scene-card-1] img').getAttribute('src');
+      expect(shown).toBe(server.project.scenes[1].image.url); // 화면과 서버가 같다
+      // 새로 불러오기가 나간 업로드가 끝나기를 기다렸으므로 화면이 업로드 결과를 보여준다
+      expect(await b.locator('[data-testid=scene-card-0] img').getAttribute('src')).toBe(server.project.scenes[0].image.url);
+      expect(server.project.scenes[0].image.fileName).toBe('_fixture_queued.png'); // 테스트 도우미가 붙이는 접두사
       await a.close();
       await b.close();
     });
