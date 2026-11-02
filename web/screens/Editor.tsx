@@ -288,7 +288,8 @@ export function Editor({ projectId }: { projectId: string }) {
           <button
             className="btn btn-secondary add-scene"
             onClick={() => void addScene()}
-            disabled={scenes.length >= SCENE_MAX || ed.structuring}
+            disabled={scenes.length >= SCENE_MAX || ed.structuring || !!ed.conflict}
+            title={ed.conflict ? '새로 불러온 뒤에 장면을 바꿀 수 있어요' : undefined}
             data-testid="add-scene"
           >
             {scenes.length >= SCENE_MAX ? `장면은 최대 ${SCENE_MAX}개예요` : '+ 장면 추가'}
@@ -408,8 +409,8 @@ export function Editor({ projectId }: { projectId: string }) {
               className="btn btn-ghost btn-sm"
               style={{ color: 'var(--err-fg)', whiteSpace: 'nowrap' }}
               onClick={() => setDeleteOpen(true)}
-              disabled={scenes.length <= SCENE_MIN || ed.structuring}
-              title={scenes.length <= SCENE_MIN ? '장면은 최소 1개가 있어야 해요' : undefined}
+              disabled={scenes.length <= SCENE_MIN || ed.structuring || !!ed.conflict}
+              title={ed.conflict ? '새로 불러온 뒤에 장면을 바꿀 수 있어요' : scenes.length <= SCENE_MIN ? '장면은 최소 1개가 있어야 해요' : undefined}
               data-testid="delete-scene"
             >
               장면 삭제

@@ -613,8 +613,36 @@ describe('1단계 화면 흐름', () => {
       expect(await cards(page).count()).toBe(3); // 화면은 아직 모른다
       const server = await fetch(`${env.base}/api/projects/${id}`).then((r) => r.json());
       expect(server.project.scenes).toHaveLength(4); // 서버는 추가했다 — 같은 요청을 다시 보냈다면 5개가 됐을 것이다
+      // 결과를 알 수 없는 동안에는 장면을 바꿀 수 없다(리뷰 지적: 버튼이 다시 켜져 같은 POST 가 한 번 더 나가 5개가 됐다)
+      expect(await page.getByTestId('add-scene').isDisabled()).toBe(true);
+      expect(await page.getByTestId('delete-scene').isDisabled()).toBe(true);
       await page.getByRole('button', { name: '새로 불러오기' }).click();
       await eventually(async () => (await cards(page).count()) === 4 && (await page.getByTestId('scenes-conflict').count()) === 0, '서버의 실제 장면 4개');
+      await page.close();
+    });
+
+    it('결과를 알 수 없는 상태에서는 이미 열려 있던 삭제 확인 창으로도 장면을 바꿀 수 없다', async () => {
+      const page = await env.newPage();
+      await shortTimeout(page);
+      await newProject(page);
+      const id = projectIdOf(page);
+      await page.route(new RegExp(`/api/projects/${id}/scenes$`), async (route) => {
+        if (route.request().method() !== 'POST') return route.continue();
+        const res = await route.fetch(); // 서버는 장면을 추가하지만 응답은 제한 시간 안에 오지 않는다
+        await new Promise((r) => setTimeout(r, 4000));
+        await route.fulfill({ response: res }).catch(() => undefined);
+      });
+      const deletes: string[] = [];
+      page.on('request', (r) => r.method() === 'DELETE' && /\/scenes\/[^/]+$/.test(r.url()) && deletes.push(r.url()));
+      await page.getByTestId('delete-scene').click(); // 확인 창을 먼저 열어 둔다(이 버튼은 충돌 상태가 아닐 때 켜져 있다)
+      // 확인 창이 열린 채로 장면 추가 요청이 나가 시간 초과된다(창이 가리므로 DOM 으로 직접 누른다)
+      await page.getByTestId('add-scene').evaluate((el: HTMLButtonElement) => el.click());
+      await eventually(hasText(page, '[data-testid=scenes-conflict]', '알 수 없어요'), '결과를 알 수 없다는 안내', 8000);
+      await page.getByTestId('confirm-delete-scene').click(); // 확인 버튼에는 비활성화 조건이 없어 훅까지 도달한다
+      await new Promise((r) => setTimeout(r, 1500));
+      expect(deletes).toEqual([]); // 삭제 요청이 서버로 나가지 않았다
+      const server = await fetch(`${env.base}/api/projects/${id}`).then((r) => r.json());
+      expect(server.project.scenes).toHaveLength(4); // 추가는 처리됐고, 삭제는 막혔다
       await page.close();
     });
 

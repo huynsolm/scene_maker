@@ -38,7 +38,13 @@ export function useProjectEditor(id: string, onToast: (msg: string) => void) {
   const [uploading, setUploading] = useState<string | null>(null); // 업로드 중인 장면 ID(장면이 지워져도 다른 장면에 표시되지 않게 ID 로 둔다)
   // 장면 구성을 이 화면이 믿을 수 없다. 'changed' = 서버의 장면 구성이 달라졌다(저장 409, 삭제 404),
   // 'unknown' = 장면 추가·삭제 요청이 시간 안에 응답하지 않아 처리됐는지 알 수 없다(다시 시도하면 장면이 중복될 수 있다).
-  const [conflict, setConflict] = useState<'changed' | 'unknown' | null>(null);
+  const [conflict, setConflictState] = useState<'changed' | 'unknown' | null>(null);
+  // 장면 변경 요청은 비동기 흐름 안에서 최신 충돌 상태를 읽어야 하므로 ref 에도 둔다(state 는 클로저에 낡은 값이 남는다).
+  const conflictRef = useRef<'changed' | 'unknown' | null>(null);
+  const setConflict = (v: 'changed' | 'unknown' | null) => {
+    conflictRef.current = v;
+    setConflictState(v);
+  };
   const [structuring, setStructuring] = useState(false); // 장면 추가·삭제 진행 중
 
   const draftRef = useRef<SaveBody | null>(null);
@@ -282,6 +288,12 @@ export function useProjectEditor(id: string, onToast: (msg: string) => void) {
    */
   const changeScenes = async (call: () => Promise<Project>): Promise<Project | null> => {
     if (structuralBusy.current || !draftRef.current) return null;
+    // 장면 구성을 믿을 수 없는 동안(다른 곳에서 바뀜, 응답이 없어 결과 불명)에는 장면을 바꾸지 않는다. 같은 요청을 다시 보내면 장면이
+    // 중복되거나 엉뚱한 장면이 지워진다. 새로 불러와 서버의 실제 구성을 읽으면(load) 풀린다.
+    if (conflictRef.current) {
+      onToast('장면 구성을 먼저 새로 불러와 주세요');
+      return null;
+    }
     structuralBusy.current = true;
     setStructuring(true);
     const gen = loadGen.current;
