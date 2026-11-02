@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Project } from '../shared/types';
 import { ApiFailure, api, type SaveBody } from './api';
 import { hm } from './format';
+import { mergeImages } from './mergeImages';
 import { precheckImage } from './rules';
 import { fitCleaned, cleanText, cleanTitle } from '../shared/text';
 import { TEXT_MAX_LENGTH, TITLE_MAX_LENGTH } from '../shared/limits';
@@ -190,7 +191,7 @@ export function useProjectEditor(id: string, onToast: (msg: string) => void) {
   const applyImages = (p: Project) =>
     setProject((prev) =>
       prev
-        ? { ...prev, status: p.status, updatedAt: p.updatedAt, scenes: prev.scenes.map((s, j) => ({ ...s, image: p.scenes[j]?.image ?? null })) }
+        ? { ...prev, status: p.status, updatedAt: p.updatedAt, scenes: mergeImages(prev.scenes, p.scenes) }
         : prev,
     );
 

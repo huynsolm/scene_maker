@@ -200,6 +200,22 @@ describe('1단계 화면 흐름', () => {
     await page.close();
   });
 
+  it('실제 장면 수보다 큰 ?scene= 값(오래된 링크)으로 열어도 화면이 깨지지 않고 마지막 장면이 선택된다', async () => {
+    const page = await env.newPage();
+    const errors: string[] = [];
+    page.on('pageerror', (e) => errors.push(e.message));
+    await newProject(page);
+    const id = projectIdOf(page);
+    await page.goto(`${env.base}/projects/${id}?scene=4`); // 기본 장면은 3개
+    await page.getByLabel('영상 제목').waitFor();
+    await eventually(hasText(page, '.col-inspector', '장면 3 편집'), '마지막 장면(3)이 선택됨');
+    await page.goto(`${env.base}/projects/${id}?scene=10`);
+    await page.getByLabel('영상 제목').waitFor();
+    await eventually(hasText(page, '.col-inspector', '장면 3 편집'), '범위를 넘어도 마지막 장면');
+    expect(errors).toEqual([]);
+    await page.close();
+  });
+
   it('붙여넣기: 꽉 찬 제목의 기존 뒷글자는 지워지지 않고, 커서는 삽입 끝에 놓인다', async () => {
     const page = await env.newPage();
     await newProject(page);

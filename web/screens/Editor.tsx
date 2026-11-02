@@ -29,10 +29,12 @@ export function Editor({ projectId }: { projectId: string }) {
   const toast = useToast();
   const ed = useProjectEditor(projectId, toast.show);
   // 결과 화면의 "장면 N 편집에서 확인하기" 같은 링크(?scene=N)로 들어오면 그 장면을 먼저 보여준다.
-  const [sel, setSel] = useState(() => {
+  const [selRaw, setSel] = useState(() => {
     const n = Number(new URLSearchParams(window.location.search).get('scene'));
     return Number.isInteger(n) && n >= 1 && n <= SCENE_MAX ? n - 1 : 0;
   });
+  // ?scene=N 이나 이전에 고른 번호가 실제 장면 수를 넘을 수 있다(장면을 지웠거나 오래된 링크). 그리면 항상 범위 안으로 맞춘다.
+  const sel = Math.min(selRaw, Math.max(0, (ed.draft?.scenes.length ?? 1) - 1));
   const [guides, setGuides] = useState(true);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [starting, setStarting] = useState(false);
