@@ -128,7 +128,14 @@ export function Editor({ projectId }: { projectId: string }) {
 
   // 영상 생성 요청. 서버는 '저장된' 내용으로 만들기 때문에 먼저 대기 중인 변경을 모두 저장한다.
   const startRender = async () => {
-    if (startingRef.current || ed.structuring) return; // 연속 클릭 방지, 장면을 바꾸는 중에는 시작하지 않는다(서버도 진행 중이면 새 작업을 만들지 않는다)
+    if (startingRef.current || ed.structuring) return; // 연속 클릭 방지(서버도 진행 중이면 새 작업을 만들지 않는다), 장면을 바꾸는 중에는 시작하지 않는다
+    // 장면 구성을 믿을 수 없으면(다른 곳에서 바뀜, 응답이 없어 결과 불명) 만들지 않는다. 확인 창이 보여 준 장면 수·길이와 서버가
+    // 스냅샷으로 만드는 내용이 달라질 수 있다. 새로 불러오면 풀린다.
+    if (ed.conflict) {
+      setConfirmOpen(false);
+      toast.show('장면 구성을 먼저 새로 불러와 주세요');
+      return;
+    }
     startingRef.current = true;
     setStarting(true);
     try {
@@ -216,7 +223,7 @@ export function Editor({ projectId }: { projectId: string }) {
             생성 진행 상황 보기
           </button>
         ) : (
-          <button className="btn btn-primary" onClick={() => setConfirmOpen(true)} disabled={ed.structuring} data-testid="open-render">
+          <button className="btn btn-primary" onClick={() => setConfirmOpen(true)} disabled={ed.structuring || !!ed.conflict} title={ed.conflict ? '새로 불러온 뒤에 영상을 만들 수 있어요' : undefined} data-testid="open-render">
             영상 만들기
           </button>
         )}
@@ -224,7 +231,9 @@ export function Editor({ projectId }: { projectId: string }) {
       {ed.conflict && (
         <div className="conflict-banner" role="alert" data-testid="scenes-conflict">
           <span>
-            장면 구성이 다른 곳에서 바뀌어서 저장할 수 없어요. 새로 불러오면 이 화면에서 아직 저장되지 않은 수정은 사라져요.
+            {ed.conflict === 'unknown'
+              ? '서버 응답이 없어서 장면을 바꿨는지 알 수 없어요. 새로 불러와 확인해 주세요. 새로 불러오면 이 화면에서 아직 저장되지 않은 수정은 사라져요.'
+              : '장면 구성이 다른 곳에서 바뀌어서 저장할 수 없어요. 새로 불러오면 이 화면에서 아직 저장되지 않은 수정은 사라져요.'}
           </span>
           <button className="btn btn-sm" onClick={() => void ed.reload()}>
             새로 불러오기
@@ -286,7 +295,8 @@ export function Editor({ projectId }: { projectId: string }) {
           <button
             className="btn btn-secondary add-scene"
             onClick={() => void addScene()}
-            disabled={scenes.length >= SCENE_MAX || ed.structuring}
+            disabled={scenes.length >= SCENE_MAX || ed.structuring || !!ed.conflict}
+            title={ed.conflict ? '새로 불러온 뒤에 장면을 바꿀 수 있어요' : undefined}
             data-testid="add-scene"
           >
             {scenes.length >= SCENE_MAX ? `장면은 최대 ${SCENE_MAX}개예요` : '+ 장면 추가'}
@@ -406,8 +416,8 @@ export function Editor({ projectId }: { projectId: string }) {
               className="btn btn-ghost btn-sm"
               style={{ color: 'var(--err-fg)', whiteSpace: 'nowrap' }}
               onClick={() => setDeleteOpen(true)}
-              disabled={scenes.length <= SCENE_MIN || ed.structuring}
-              title={scenes.length <= SCENE_MIN ? '장면은 최소 1개가 있어야 해요' : undefined}
+              disabled={scenes.length <= SCENE_MIN || ed.structuring || !!ed.conflict}
+              title={ed.conflict ? '새로 불러온 뒤에 장면을 바꿀 수 있어요' : scenes.length <= SCENE_MIN ? '장면은 최소 1개가 있어야 해요' : undefined}
               data-testid="delete-scene"
             >
               장면 삭제

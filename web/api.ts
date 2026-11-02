@@ -12,25 +12,61 @@ export class ApiFailure extends Error {
   }
 }
 
-async function request<T>(method: string, url: string, body?: BodyInit | object): Promise<T> {
+/** 요청 한 번의 제한 시간(밀리초). 일반 요청은 모두 빠른 요청이다(영상 만들기는 접수만 하고 바로 돌려준다). */
+export const REQUEST_TIMEOUT_MS = 30_000;
+/** 이미지 업로드는 파일이 클수록 오래 걸리므로 크기에 비례해 늘린다(10MB 면 160초 — 초당 약 0.5Mbps 까지 견딘다). */
+const UPLOAD_BASE_MS = 60_000;
+const UPLOAD_PER_MB_MS = 10_000;
+export const uploadTimeoutMs = (bytes: number) => UPLOAD_BASE_MS + Math.ceil(bytes / (1024 * 1024)) * UPLOAD_PER_MB_MS;
+
+/** 진단·테스트용: `window.__SM_TIMEOUT_MS` 가 숫자면 모든 요청의 제한 시간을 그 값으로 바꾼다. */
+function effectiveTimeout(ms: number): number {
+  const o = (globalThis as { __SM_TIMEOUT_MS?: unknown }).__SM_TIMEOUT_MS;
+  return typeof o === 'number' && o > 0 ? o : ms;
+}
+
+async function request<T>(method: string, url: string, body?: BodyInit | object, timeoutMs = REQUEST_TIMEOUT_MS): Promise<T> {
   const isForm = body instanceof FormData;
-  let res: Response;
+  const ctrl = new AbortController();
+  let timedOut = false;
+  // 응답 본문을 다 읽을 때까지 포함한 제한 시간이다. 서버가 응답하지 않으면 요청이 영영 끝나지 않아, 줄 서 있는 작업과
+  // "불러오는 중…"이 멈춘다.
+  const timer = setTimeout(() => {
+    timedOut = true;
+    ctrl.abort();
+  }, effectiveTimeout(timeoutMs));
   try {
-    res = await fetch(url, {
-      method,
-      headers: body && !isForm ? { 'Content-Type': 'application/json' } : undefined,
-      body: body ? (isForm ? (body as FormData) : JSON.stringify(body)) : undefined,
-    });
-  } catch {
-    throw new ApiFailure('NETWORK', '서버에 연결하지 못했어요. 연결을 확인하고 다시 시도해 주세요.', 0);
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        method,
+        headers: body && !isForm ? { 'Content-Type': 'application/json' } : undefined,
+        body: body ? (isForm ? (body as FormData) : JSON.stringify(body)) : undefined,
+        signal: ctrl.signal,
+      });
+    } catch {
+      if (timedOut) throw timeoutFailure();
+      throw new ApiFailure('NETWORK', '서버에 연결하지 못했어요. 연결을 확인하고 다시 시도해 주세요.', 0);
+    }
+    if (res.status === 204) return undefined as T;
+    let data: any = null;
+    try {
+      data = await res.json();
+    } catch {
+      if (timedOut) throw timeoutFailure();
+      /* 본문이 JSON 이 아닌 경우 아래에서 일반 오류로 처리 */
+    }
+    return unwrap<T>(res, data);
+  } finally {
+    clearTimeout(timer);
   }
-  if (res.status === 204) return undefined as T;
-  let data: any = null;
-  try {
-    data = await res.json();
-  } catch {
-    /* 본문이 JSON 이 아닌 경우 아래에서 일반 오류로 처리 */
-  }
+}
+
+/** 서버가 처리했는지는 알 수 없다(요청은 닿았을 수 있다). 호출하는 쪽이 결과를 모르는 채로 이어 가지 않게 코드로 구분한다. */
+const timeoutFailure = () =>
+  new ApiFailure('TIMEOUT', '서버 응답이 너무 늦어요. 처리됐는지 알 수 없으니 연결을 확인하고 새로 불러와 확인해 주세요.', 0);
+
+function unwrap<T>(res: Response, data: any): T {
   if (!res.ok) {
     throw new ApiFailure(
       data?.error?.code ?? 'UNKNOWN',
@@ -67,7 +103,7 @@ export const api = {
   uploadImage: (id: string, sceneId: string, file: File) => {
     const form = new FormData();
     form.append('file', file);
-    return request<{ project: Project }>('POST', `/api/projects/${id}/scenes/${sceneId}/image`, form).then(
+    return request<{ project: Project }>('POST', `/api/projects/${id}/scenes/${sceneId}/image`, form, uploadTimeoutMs(file.size)).then(
       (r) => r.project,
     );
   },

@@ -36,7 +36,15 @@ export function useProjectEditor(id: string, onToast: (msg: string) => void) {
   const [savedAt, setSavedAt] = useState('');
   const [saveError, setSaveError] = useState<string | null>(null);
   const [uploading, setUploading] = useState<string | null>(null); // 업로드 중인 장면 ID(장면이 지워져도 다른 장면에 표시되지 않게 ID 로 둔다)
-  const [conflict, setConflict] = useState(false); // 서버의 장면 구성이 이 화면과 달라졌다(저장이 409 로 거절됨)
+  // 장면 구성을 이 화면이 믿을 수 없다. 'changed' = 서버의 장면 구성이 달라졌다(저장 409, 삭제 404),
+  // 'unknown' = 장면 추가·삭제 요청이 시간 안에 응답하지 않아 처리됐는지 알 수 없다(다시 시도하면 장면이 중복될 수 있다).
+  const [conflict, setConflictState] = useState<'changed' | 'unknown' | null>(null);
+  // 장면 변경 요청은 비동기 흐름 안에서 최신 충돌 상태를 읽어야 하므로 ref 에도 둔다(state 는 클로저에 낡은 값이 남는다).
+  const conflictRef = useRef<'changed' | 'unknown' | null>(null);
+  const setConflict = (v: 'changed' | 'unknown' | null) => {
+    conflictRef.current = v;
+    setConflictState(v);
+  };
   const [structuring, setStructuring] = useState(false); // 장면 추가·삭제 진행 중
 
   const draftRef = useRef<SaveBody | null>(null);
@@ -89,7 +97,7 @@ export function useProjectEditor(id: string, onToast: (msg: string) => void) {
       sentOk.current = 0;
       setProject(p);
       setDraft(d);
-      setConflict(false);
+      setConflict(null);
       saveFailedRef.current = false;
       setSaveError(null);
       setSave('saved');
@@ -164,7 +172,7 @@ export function useProjectEditor(id: string, onToast: (msg: string) => void) {
     } catch (e) {
       if (gen !== loadGen.current) return false; // 새로 불러오기 전에 보낸 요청의 실패는 새 화면의 상태가 아니다
       saveFailedRef.current = true;
-      if (alive.current && e instanceof ApiFailure && e.code === 'SCENES_CHANGED') setConflict(true);
+      if (alive.current && e instanceof ApiFailure && e.code === 'SCENES_CHANGED') setConflict('changed');
       if (alive.current) {
         setSaveError(e instanceof Error ? e.message : '저장하지 못했어요.');
         setSave('failed');
@@ -280,6 +288,12 @@ export function useProjectEditor(id: string, onToast: (msg: string) => void) {
    */
   const changeScenes = async (call: () => Promise<Project>): Promise<Project | null> => {
     if (structuralBusy.current || !draftRef.current) return null;
+    // 장면 구성을 믿을 수 없는 동안(다른 곳에서 바뀜, 응답이 없어 결과 불명)에는 장면을 바꾸지 않는다. 같은 요청을 다시 보내면 장면이
+    // 중복되거나 엉뚱한 장면이 지워진다. 새로 불러와 서버의 실제 구성을 읽으면(load) 풀린다.
+    if (conflictRef.current) {
+      onToast('장면 구성을 먼저 새로 불러와 주세요');
+      return null;
+    }
     structuralBusy.current = true;
     setStructuring(true);
     const gen = loadGen.current;
@@ -314,7 +328,9 @@ export function useProjectEditor(id: string, onToast: (msg: string) => void) {
       });
     } catch (e) {
       if (gen === loadGen.current) {
-        if (e instanceof ApiFailure && e.code === 'NOT_FOUND') setConflict(true);
+        if (e instanceof ApiFailure && e.code === 'NOT_FOUND') setConflict('changed');
+        // 응답이 없으면 서버가 장면을 바꿨을 수 있다. 같은 요청을 다시 보내면 장면이 중복되거나 엉뚱한 장면이 지워지므로, 새로 불러오게 한다.
+        if (e instanceof ApiFailure && e.code === 'TIMEOUT') setConflict('unknown');
         onToast(e instanceof Error ? e.message : '장면을 바꾸지 못했어요');
       }
       return null;

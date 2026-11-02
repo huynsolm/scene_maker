@@ -574,6 +574,131 @@ describe('1단계 화면 흐름', () => {
       await page.close();
     });
 
+    /** 모든 요청의 제한 시간을 1.5초로 줄여(진단용 `window.__SM_TIMEOUT_MS`) 응답이 없는 서버를 빨리 흉내 낸다. */
+    const shortTimeout = (page: Page) => page.addInitScript(() => ((window as unknown as { __SM_TIMEOUT_MS: number }).__SM_TIMEOUT_MS = 1500));
+
+    it('저장 요청이 응답하지 않으면 시간 제한 뒤 저장 실패로 표시하고, 다시 저장하면 저장된다', async () => {
+      const page = await env.newPage();
+      await shortTimeout(page);
+      await newProject(page);
+      const id = projectIdOf(page);
+      let hang = true;
+      await page.route(new RegExp(`/api/projects/${id}$`), async (route) => {
+        if (route.request().method() !== 'PUT' || !hang) return route.continue();
+        return new Promise(() => undefined); // 영영 답하지 않는다 — 시간 제한이 없으면 저장 실패로 표시되지 않는다
+      });
+      await page.locator('#scene-text').fill('시간 제한 뒤 저장');
+      await eventually(hasText(page, SAVE, '저장하지 못했어요'), '저장 실패 표시', 8000);
+      hang = false;
+      await page.getByRole('button', { name: '다시 저장' }).click();
+      await eventually(hasText(page, SAVE, '저장됨'), '다시 저장됨');
+      expect(await serverText(id)).toBe('시간 제한 뒤 저장');
+      await page.close();
+    });
+
+    it('장면 추가 요청이 응답하지 않으면 결과를 알 수 없다고 안내하고, 새로 불러오면 서버의 실제 장면이 보인다', async () => {
+      const page = await env.newPage();
+      await shortTimeout(page);
+      await newProject(page);
+      const id = projectIdOf(page);
+      // 서버는 장면을 추가하지만 응답이 제한 시간 안에 오지 않는다(처리됐는지 화면은 알 수 없다)
+      await page.route(new RegExp(`/api/projects/${id}/scenes$`), async (route) => {
+        if (route.request().method() !== 'POST') return route.continue();
+        const res = await route.fetch();
+        await new Promise((r) => setTimeout(r, 4000));
+        await route.fulfill({ response: res }).catch(() => undefined);
+      });
+      await page.getByTestId('add-scene').click();
+      await eventually(hasText(page, '[data-testid=scenes-conflict]', '알 수 없어요'), '결과를 알 수 없다는 안내', 8000);
+      expect(await cards(page).count()).toBe(3); // 화면은 아직 모른다
+      const server = await fetch(`${env.base}/api/projects/${id}`).then((r) => r.json());
+      expect(server.project.scenes).toHaveLength(4); // 서버는 추가했다 — 같은 요청을 다시 보냈다면 5개가 됐을 것이다
+      // 결과를 알 수 없는 동안에는 장면을 바꿀 수 없다(리뷰 지적: 버튼이 다시 켜져 같은 POST 가 한 번 더 나가 5개가 됐다)
+      expect(await page.getByTestId('add-scene').isDisabled()).toBe(true);
+      expect(await page.getByTestId('delete-scene').isDisabled()).toBe(true);
+      await page.getByRole('button', { name: '새로 불러오기' }).click();
+      await eventually(async () => (await cards(page).count()) === 4 && (await page.getByTestId('scenes-conflict').count()) === 0, '서버의 실제 장면 4개');
+      await page.close();
+    });
+
+    it('결과를 알 수 없는 상태에서는 이미 열려 있던 삭제 확인 창으로도 장면을 바꿀 수 없다', async () => {
+      const page = await env.newPage();
+      await shortTimeout(page);
+      await newProject(page);
+      const id = projectIdOf(page);
+      await page.route(new RegExp(`/api/projects/${id}/scenes$`), async (route) => {
+        if (route.request().method() !== 'POST') return route.continue();
+        const res = await route.fetch(); // 서버는 장면을 추가하지만 응답은 제한 시간 안에 오지 않는다
+        await new Promise((r) => setTimeout(r, 4000));
+        await route.fulfill({ response: res }).catch(() => undefined);
+      });
+      const deletes: string[] = [];
+      page.on('request', (r) => r.method() === 'DELETE' && /\/scenes\/[^/]+$/.test(r.url()) && deletes.push(r.url()));
+      await page.getByTestId('delete-scene').click(); // 확인 창을 먼저 열어 둔다(이 버튼은 충돌 상태가 아닐 때 켜져 있다)
+      // 확인 창이 열린 채로 장면 추가 요청이 나가 시간 초과된다(창이 가리므로 DOM 으로 직접 누른다)
+      await page.getByTestId('add-scene').evaluate((el: HTMLButtonElement) => el.click());
+      await eventually(hasText(page, '[data-testid=scenes-conflict]', '알 수 없어요'), '결과를 알 수 없다는 안내', 8000);
+      await page.getByTestId('confirm-delete-scene').click(); // 확인 버튼에는 비활성화 조건이 없어 훅까지 도달한다
+      await new Promise((r) => setTimeout(r, 1500));
+      expect(deletes).toEqual([]); // 삭제 요청이 서버로 나가지 않았다
+      const server = await fetch(`${env.base}/api/projects/${id}`).then((r) => r.json());
+      expect(server.project.scenes).toHaveLength(4); // 추가는 처리됐고, 삭제는 막혔다
+      await page.close();
+    });
+
+    it('결과를 알 수 없는 상태에서는 이미 열려 있던 영상 만들기 확인 창으로도 영상을 만들 수 없다', async () => {
+      const p = completeProject('결과 불명 중 생성');
+      const page = await env.newPage();
+      await shortTimeout(page);
+      await page.goto(`${env.base}/projects/${p.id}`);
+      await page.getByLabel('영상 제목').waitFor();
+      await page.route(new RegExp(`/api/projects/${p.id}/scenes$`), async (route) => {
+        if (route.request().method() !== 'POST') return route.continue();
+        const res = await route.fetch(); // 서버는 장면을 추가하지만 응답은 제한 시간 안에 오지 않는다
+        await new Promise((r) => setTimeout(r, 4000));
+        await route.fulfill({ response: res }).catch(() => undefined);
+      });
+      const renders: string[] = [];
+      page.on('request', (r) => r.method() === 'POST' && /\/renders$/.test(r.url()) && renders.push(r.url()));
+      await page.getByTestId('open-render').click(); // 확인 창을 먼저 연다(이 버튼은 충돌 상태가 아닐 때 켜져 있다)
+      await page.getByTestId('add-scene').evaluate((el: HTMLButtonElement) => el.click()); // 창이 가리므로 DOM 으로 누른다
+      await eventually(hasText(page, '[data-testid=scenes-conflict]', '알 수 없어요'), '결과를 알 수 없다는 안내', 8000);
+      await page.getByRole('button', { name: '영상 만들기 시작' }).click(); // 확인 창의 이 버튼은 훅·화면의 검사까지 도달한다
+      await new Promise((r) => setTimeout(r, 1500));
+      expect(renders).toEqual([]); // 영상 요청이 서버로 나가지 않았다
+      const latest = await fetch(`${env.base}/api/projects/${p.id}/renders/latest`).then((r) => r.json());
+      expect(latest.job).toBeNull();
+      expect(await page.getByRole('dialog').count()).toBe(0); // 확인 창은 닫히고
+      expect(await page.getByTestId('open-render').isDisabled()).toBe(true); // 헤더 버튼은 새로 불러올 때까지 막힌다
+      await page.close();
+    });
+
+    it('줄 서 있는 요청이 영영 응답하지 않아도, 시간 제한 뒤에는 새로 불러오기가 끝난다', async () => {
+      const a = await env.newPage();
+      await newProject(a);
+      const id = projectIdOf(a);
+      const b = await env.newPage();
+      await shortTimeout(b);
+      await b.goto(`${env.base}/projects/${id}`);
+      await b.getByLabel('영상 제목').waitFor();
+      await a.locator('[data-testid=scene-card-1]').click();
+      await a.getByTestId('delete-scene').click();
+      await a.getByTestId('confirm-delete-scene').click();
+      await eventually(async () => (await cards(a).count()) === 2, 'a: 장면 2개');
+      await b.locator('#scene-text').fill('충돌 유발');
+      await eventually(async () => (await b.getByTestId('scenes-conflict').count()) === 1, '충돌 안내');
+      // b: 이미지 업로드 요청이 영영 응답하지 않는다. 새로 불러오기는 나간 요청이 끝나기를 기다리므로 시간 제한이 없으면 끝나지 않는다.
+      await b.route(/\/api\/projects\/[^/]+\/scenes\/[^/]+\/image$/, async (route) => {
+        if (route.request().method() === 'POST') return new Promise(() => undefined);
+        return route.continue();
+      });
+      await b.getByTestId('file-input').setInputFiles(tmp('hang.png', solidPng(64, 36, [9, 9, 9])));
+      await b.getByRole('button', { name: '새로 불러오기' }).click();
+      await eventually(async () => (await cards(b).count()) === 2 && (await b.getByTestId('scenes-conflict').count()) === 0, '새로 불러오기가 끝남', 9000);
+      await a.close();
+      await b.close();
+    });
+
     it('다른 화면에서 장면이 바뀌면 저장이 거절되고 안내 후 새로 불러올 수 있다(지운 장면이 되살아나지 않는다)', async () => {
       const a = await env.newPage();
       await newProject(a);
