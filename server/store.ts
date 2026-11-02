@@ -73,6 +73,7 @@ export class Store {
       .prepare(
         `SELECT p.id, p.title, p.status, p.is_sample, p.updated_at,
                 (SELECT COALESCE(SUM(duration_sec),0) FROM scenes s WHERE s.project_id = p.id) AS total_sec,
+                (SELECT COUNT(*) FROM scenes s WHERE s.project_id = p.id) AS scene_count,
                 (SELECT image_id FROM scenes s WHERE s.project_id = p.id AND image_id IS NOT NULL
                   ORDER BY position LIMIT 1) AS thumb_id
            FROM projects p
@@ -85,6 +86,7 @@ export class Store {
       is_sample: number;
       updated_at: string;
       total_sec: number;
+      scene_count: number;
       thumb_id: string | null;
     }>;
     return rows.map((r) => ({
@@ -93,6 +95,7 @@ export class Store {
       status: r.status,
       updatedAt: r.updated_at,
       totalSec: r.total_sec,
+      sceneCount: r.scene_count,
       thumbnailUrl: r.thumb_id ? imageUrl(r.thumb_id) : null,
       isSample: r.is_sample === 1,
     }));

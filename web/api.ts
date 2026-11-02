@@ -54,6 +54,9 @@ export const api = {
   getProject: (id: string) => request<{ project: Project }>('GET', `/api/projects/${id}`).then((r) => r.project),
   saveProject: (id: string, body: SaveBody) =>
     request<{ project: Project }>('PUT', `/api/projects/${id}`, body).then((r) => r.project),
+  addScene: (id: string) => request<{ project: Project }>('POST', `/api/projects/${id}/scenes`).then((r) => r.project),
+  deleteScene: (id: string, sceneId: string) =>
+    request<{ project: Project }>('DELETE', `/api/projects/${id}/scenes/${sceneId}`).then((r) => r.project),
   deleteProject: (id: string) => request<void>('DELETE', `/api/projects/${id}`),
   createRender: (id: string) => request<{ job: RenderJobView }>('POST', `/api/projects/${id}/renders`).then((r) => r.job),
   /** 프로젝트 소속이 맞는 작업만 돌려준다(다른 프로젝트의 작업 ID 면 404). */

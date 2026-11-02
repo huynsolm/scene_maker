@@ -35,6 +35,7 @@ export interface ProjectSummary {
   status: ProjectStatus;
   updatedAt: string;
   totalSec: number;
+  sceneCount: number;
   thumbnailUrl: string | null;
   isSample: boolean;
 }

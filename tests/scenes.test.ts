@@ -136,4 +136,15 @@ describe('장면 추가·삭제', () => {
     p = await get(app, projectId);
     expect(p.scenes).toHaveLength(4);
   });
+
+  it('프로젝트 목록이 장면 수(sceneCount)와 총 길이를 장면 추가·삭제에 맞춰 돌려준다', async () => {
+    const { app, projectId } = await setup();
+    const list = async () => (await app.inject({ url: '/api/projects' })).json().projects.find((p: any) => p.id === projectId);
+    expect(await list()).toMatchObject({ sceneCount: 3, totalSec: 30 });
+    await app.inject({ method: 'POST', url: `/api/projects/${projectId}/scenes` });
+    expect(await list()).toMatchObject({ sceneCount: 4, totalSec: 40 });
+    const p = await get(app, projectId);
+    await app.inject({ method: 'DELETE', url: `/api/projects/${projectId}/scenes/${p.scenes[0].id}` });
+    expect(await list()).toMatchObject({ sceneCount: 3, totalSec: 30 });
+  });
 });

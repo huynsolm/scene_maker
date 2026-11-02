@@ -216,6 +216,107 @@ describe('1단계 화면 흐름', () => {
     await page.close();
   });
 
+  describe('장면 추가·삭제', () => {
+    const cards = (page: Page) => page.locator('[data-testid^=scene-card-]');
+    const saved = (page: Page) => hasText(page, SAVE, '저장됨');
+
+    it('장면을 추가하면 새 장면이 선택되고, 입력한 내용이 새로고침 뒤에도 남는다', async () => {
+      const page = await env.newPage();
+      await newProject(page);
+      expect(await cards(page).count()).toBe(3);
+      await page.getByTestId('add-scene').click();
+      await eventually(async () => (await cards(page).count()) === 4, '장면 4개');
+      await eventually(hasText(page, '.col-inspector', '장면 4 편집'), '새 장면(4)이 선택됨');
+      await eventually(hasText(page, '.col-scenes', '장면 4개가 순서대로'), '개수 안내');
+      await page.locator('#scene-text').fill('네 번째 장면');
+      await eventually(saved(page), '저장됨');
+      await page.reload();
+      await page.getByLabel('영상 제목').waitFor();
+      expect(await cards(page).count()).toBe(4);
+      await cards(page).nth(3).click();
+      await eventually(async () => (await page.locator('#scene-text').inputValue()) === '네 번째 장면', '내용 유지');
+      await page.close();
+    });
+
+    it('최대 10개에서 추가 버튼이 막히고, 최소 1개에서 삭제 버튼이 막힌다', async () => {
+      const page = await env.newPage();
+      await newProject(page);
+      for (let n = 3; n < 10; n++) {
+        await page.getByTestId('add-scene').click();
+        await eventually(async () => (await cards(page).count()) === n + 1, `장면 ${n + 1}개`);
+      }
+      expect(await page.getByTestId('add-scene').isDisabled()).toBe(true);
+      expect(await page.getByTestId('add-scene').innerText()).toContain('최대 10개');
+      for (let n = 10; n > 1; n--) {
+        await page.getByTestId('delete-scene').click();
+        await page.getByTestId('confirm-delete-scene').click();
+        await eventually(async () => (await cards(page).count()) === n - 1, `장면 ${n - 1}개`);
+      }
+      expect(await page.getByTestId('delete-scene').isDisabled()).toBe(true);
+      await page.close();
+    });
+
+    it('삭제는 확인을 거치고(취소하면 그대로), 지운 뒤 뒤 장면의 내용이 앞으로 당겨진다. 삭제 직전에 입력한 내용도 잃지 않는다', async () => {
+      const page = await env.newPage();
+      await newProject(page);
+      for (let i = 0; i < 3; i++) {
+        await cards(page).nth(i).click();
+        await page.locator('#scene-text').fill(`문구 ${i + 1}`);
+      }
+      await cards(page).nth(1).click();
+      await page.getByTestId('delete-scene').click();
+      await page.getByRole('button', { name: '취소' }).click();
+      expect(await cards(page).count()).toBe(3); // 취소하면 그대로
+      // 마지막 입력이 아직 저장되기 전(디바운스 중)에 삭제를 확인해도 먼저 저장된다
+      await page.getByTestId('delete-scene').click();
+      await page.getByTestId('confirm-delete-scene').click();
+      await eventually(async () => (await cards(page).count()) === 2, '장면 2개');
+      await eventually(hasText(page, '[data-testid=scene-card-1]', '문구 3'), '뒤 장면이 당겨짐');
+      await eventually(saved(page), '저장됨');
+      await page.reload();
+      await page.getByLabel('영상 제목').waitFor();
+      expect(await cards(page).count()).toBe(2);
+      expect(await cards(page).nth(0).innerText()).toContain('문구 1');
+      expect(await cards(page).nth(1).innerText()).toContain('문구 3');
+      await page.close();
+    });
+
+    it('프로젝트 목록 카드가 실제 장면 수를 보여준다', async () => {
+      const page = await env.newPage();
+      await newProject(page);
+      await page.getByTestId('add-scene').click();
+      await eventually(async () => (await cards(page).count()) === 4, '장면 4개');
+      await eventually(saved(page), '저장됨');
+      await page.goto(env.base + '/');
+      await eventually(async () => (await page.locator('body').innerText()).includes('장면 4개'), '목록에 장면 4개');
+      await page.close();
+    });
+
+    it('다른 화면에서 장면이 바뀌면 저장이 거절되고 안내 후 새로 불러올 수 있다(지운 장면이 되살아나지 않는다)', async () => {
+      const a = await env.newPage();
+      await newProject(a);
+      const id = projectIdOf(a);
+      const b = await env.newPage();
+      await b.goto(`${env.base}/projects/${id}`);
+      await b.getByLabel('영상 제목').waitFor();
+      // a 에서 장면 2를 지운다
+      await a.locator('[data-testid=scene-card-1]').click();
+      await a.getByTestId('delete-scene').click();
+      await a.getByTestId('confirm-delete-scene').click();
+      await eventually(async () => (await cards(a).count()) === 2, 'a: 장면 2개');
+      // 오래된 화면 b 에서 입력하면 자동 저장이 409 로 거절된다
+      await b.locator('#scene-text').fill('오래된 화면의 입력');
+      await eventually(async () => (await b.getByTestId('scenes-conflict').count()) === 1, '충돌 안내');
+      const server = await fetch(`${env.base}/api/projects/${id}`).then((r) => r.json());
+      expect(server.project.scenes).toHaveLength(2);
+      expect(server.project.scenes.every((s: any) => s.text !== '오래된 화면의 입력')).toBe(true);
+      await b.getByRole('button', { name: '새로 불러오기' }).click();
+      await eventually(async () => (await cards(b).count()) === 2 && (await b.getByTestId('scenes-conflict').count()) === 0, '새로 불러옴');
+      await a.close();
+      await b.close();
+    });
+  });
+
   it('붙여넣기: 꽉 찬 제목의 기존 뒷글자는 지워지지 않고, 커서는 삽입 끝에 놓인다', async () => {
     const page = await env.newPage();
     await newProject(page);

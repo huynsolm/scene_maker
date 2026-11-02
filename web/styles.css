@@ -130,6 +130,9 @@ a.btn, a.btn:hover { text-decoration: none; }
 .save-state i { width: 7px; height: 7px; border-radius: 50%; }
 .total-chip { display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 12px; border-radius: 8px; background: #f2f3f6; font-size: 13px; color: var(--text-2); }
 .total-chip strong { color: var(--text); font-size: 14px; }
+.conflict-banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 10px 20px; background: var(--err-bg); color: var(--err-fg); font-size: 13px; border-bottom: 1px solid #f0c4c8; }
+.conflict-banner .btn { background: #fff; color: var(--err-fg); border: 1px solid #f0c4c8; }
+.add-scene { width: 100%; height: 40px; border-style: dashed; }
 .busy-banner { padding: 10px 20px; background: var(--primary-soft); color: var(--primary-text); font-size: 13px; border-bottom: 1px solid #dfe0f7; }
 
 /* ── 편집 화면 본문 ── */

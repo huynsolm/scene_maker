@@ -3,7 +3,9 @@ import {
   DEFAULT_TOTAL_SEC,
   TEXT_MAX_LENGTH,
   TITLE_MAX_LENGTH,
+  SCENE_DEFAULT,
   SCENE_MAX,
+  SCENE_MIN,
   DURATION_MAX_SEC,
   DURATION_MIN_SEC,
   DURATION_QUICK_PICKS,
@@ -17,7 +19,7 @@ import { cleanText, cleanTitle } from '../../shared/text';
 import { pasteInto } from '../paste';
 import type { Project } from '../../shared/types';
 import { ApiFailure, api } from '../api';
-import { CenterMessage, SampleTag } from '../components';
+import { CenterMessage, Modal, SampleTag } from '../components';
 import { isBusy, mmss } from '../format';
 import { Link, navigate } from '../router';
 import { clampDuration, findMissing } from '../rules';
@@ -37,6 +39,7 @@ export function Editor({ projectId }: { projectId: string }) {
   const sel = Math.min(selRaw, Math.max(0, (ed.draft?.scenes.length ?? 1) - 1));
   const [guides, setGuides] = useState(true);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const [starting, setStarting] = useState(false);
   const startingRef = useRef(false); // state 는 같은 틱의 두 번째 클릭에는 아직 갱신되지 않아서 ref 로 동기 차단한다
   const fileRef = useRef<HTMLInputElement>(null);
@@ -92,7 +95,9 @@ export function Editor({ projectId }: { projectId: string }) {
 
   const project: Project = ed.project;
   const draft = ed.draft;
-  const scenes = draft.scenes.map((s, i) => ({ ...s, image: project.scenes[i]?.image ?? null }));
+  // 이미지는 장면 ID 로 맞춘다(위치로 맞추면 장면이 지워진 직후 다른 장면의 이미지가 붙는다).
+  const imageById = new Map(project.scenes.map((s) => [s.id, s.image]));
+  const scenes = draft.scenes.map((s) => ({ ...s, id: s.id ?? '', image: imageById.get(s.id ?? '') ?? null }));
   const cur = scenes[sel]!;
   const total = scenes.reduce((a, s) => a + s.durationSec, 0);
   const busy = isBusy(project.status);
@@ -129,6 +134,16 @@ export function Editor({ projectId }: { projectId: string }) {
     }
   };
 
+  const addScene = async () => {
+    const pos = await ed.addScene();
+    if (pos !== null) select(pos); // 새 장면을 바로 편집할 수 있게 선택한다
+  };
+  const confirmDeleteScene = async () => {
+    setDeleteOpen(false);
+    await ed.deleteScene(cur.id); // 선택 번호는 아래 보정으로 범위 안에 머문다(지운 자리의 다음 장면, 없으면 마지막)
+    resetPlayback();
+  };
+
   const pickFile = () => fileRef.current?.click();
   const onFiles = (files: FileList | null) => {
     const f = files?.[0];
@@ -136,7 +151,9 @@ export function Editor({ projectId }: { projectId: string }) {
   };
 
   const totalNote =
-    total === DEFAULT_TOTAL_SEC
+    scenes.length !== SCENE_DEFAULT
+      ? `장면 ${scenes.length}개가 합쳐서 ${total}초예요. 그대로 만들어도 괜찮아요.`
+      : total === DEFAULT_TOTAL_SEC
       ? `기본 길이 ${DEFAULT_TOTAL_SEC}초에 맞춰져 있어요.`
       : `기본 길이(${DEFAULT_TOTAL_SEC}초)보다 ${total > DEFAULT_TOTAL_SEC ? `${total - DEFAULT_TOTAL_SEC}초 길어요` : `${DEFAULT_TOTAL_SEC - total}초 짧아요`}. 그대로 만들어도 괜찮아요.`;
 
@@ -180,6 +197,16 @@ export function Editor({ projectId }: { projectId: string }) {
           </button>
         )}
       </header>
+      {ed.conflict && (
+        <div className="conflict-banner" role="alert" data-testid="scenes-conflict">
+          <span>
+            장면 구성이 다른 곳에서 바뀌어서 저장할 수 없어요. 새로 불러오면 이 화면에서 아직 저장되지 않은 수정은 사라져요.
+          </span>
+          <button className="btn btn-sm" onClick={() => void ed.reload()}>
+            새로 불러오기
+          </button>
+        </div>
+      )}
       {busy && (
         <div className="busy-banner">
           이 프로젝트는 지금 영상을 만드는 중이에요. 생성이 끝나기 전까지는 새로 요청할 수 없고, 지금 수정한 내용은 다음 생성 때 반영돼요.
@@ -191,14 +218,14 @@ export function Editor({ projectId }: { projectId: string }) {
         <section className="col-scenes" aria-label="장면 목록">
           <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
             <h2 style={{ fontSize: 14, fontWeight: 700 }}>장면</h2>
-            <span style={{ color: 'var(--muted)', fontSize: 12 }}>3개 장면이 순서대로 재생돼요</span>
+            <span style={{ color: 'var(--muted)', fontSize: 12 }}>장면 {scenes.length}개가 순서대로 재생돼요</span>
           </div>
           <div className="scene-list">
             {scenes.map((s, i) => {
               const issues = [!s.image && '이미지 없음', !s.text.trim() && '문구 없음'].filter(Boolean).join(' · ');
               return (
                 <button
-                  key={i}
+                  key={s.id || i}
                   className={`scene-card${i === sel ? ' on' : ''}`}
                   aria-pressed={i === sel}
                   onClick={() => select(i)}
@@ -232,6 +259,14 @@ export function Editor({ projectId }: { projectId: string }) {
               );
             })}
           </div>
+          <button
+            className="btn btn-secondary add-scene"
+            onClick={() => void addScene()}
+            disabled={scenes.length >= SCENE_MAX || ed.structuring}
+            data-testid="add-scene"
+          >
+            {scenes.length >= SCENE_MAX ? `장면은 최대 ${SCENE_MAX}개예요` : '+ 장면 추가'}
+          </button>
           <div className="total-box">
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
               <span style={{ color: 'var(--text-2)' }}>전체 길이</span>
@@ -338,9 +373,21 @@ export function Editor({ projectId }: { projectId: string }) {
 
         {/* 3. 편집 패널 */}
         <section className="col-inspector" aria-label="장면 편집">
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-            <h2 style={{ fontSize: 16, fontWeight: 700 }}>장면 {sel + 1} 편집</h2>
-            <span style={{ fontSize: 13, color: 'var(--text-3)' }}>입력하면 자동으로 저장되고 미리보기에 바로 반영돼요.</span>
+          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+              <h2 style={{ fontSize: 16, fontWeight: 700 }}>장면 {sel + 1} 편집</h2>
+              <span style={{ fontSize: 13, color: 'var(--text-3)' }}>입력하면 자동으로 저장되고 미리보기에 바로 반영돼요.</span>
+            </div>
+            <button
+              className="btn btn-ghost btn-sm"
+              style={{ color: 'var(--err-fg)', whiteSpace: 'nowrap' }}
+              onClick={() => setDeleteOpen(true)}
+              disabled={scenes.length <= SCENE_MIN || ed.structuring}
+              title={scenes.length <= SCENE_MIN ? '장면은 최소 1개가 있어야 해요' : undefined}
+              data-testid="delete-scene"
+            >
+              장면 삭제
+            </button>
           </div>
 
           <div className="field">
@@ -385,10 +432,10 @@ export function Editor({ projectId }: { projectId: string }) {
                     {cur.image.width} × {cur.image.height}
                   </span>
                   <div style={{ display: 'flex', gap: 6 }}>
-                    <button className="btn btn-secondary btn-sm" onClick={pickFile} disabled={ed.uploading === sel}>
-                      {ed.uploading === sel ? '올리는 중…' : '바꾸기'}
+                    <button className="btn btn-secondary btn-sm" onClick={pickFile} disabled={ed.uploading === cur.id}>
+                      {ed.uploading === cur.id ? '올리는 중…' : '바꾸기'}
                     </button>
-                    <button className="btn btn-ghost btn-sm" style={{ color: 'var(--err-fg)' }} onClick={() => void ed.removeImage(sel)} disabled={ed.uploading === sel}>
+                    <button className="btn btn-ghost btn-sm" style={{ color: 'var(--err-fg)' }} onClick={() => void ed.removeImage(sel)} disabled={ed.uploading === cur.id}>
                       삭제
                     </button>
                   </div>
@@ -396,7 +443,7 @@ export function Editor({ projectId }: { projectId: string }) {
               </div>
             ) : (
               <>
-                <DropZone onFile={(f) => void ed.uploadImage(sel, f)} onPick={pickFile} uploading={ed.uploading === sel} />
+                <DropZone onFile={(f) => void ed.uploadImage(sel, f)} onPick={pickFile} uploading={ed.uploading === cur.id} />
                 <span className="note-warn">이미지가 있어야 영상을 만들 수 있어요.</span>
               </>
             )}
@@ -404,7 +451,7 @@ export function Editor({ projectId }: { projectId: string }) {
 
           <div className="field">
             <span className="label">장면 길이</span>
-            <DurationControl key={`${sel}`} value={cur.durationSec} onChange={(v) => { ed.setDuration(sel, v); resetPlayback(); }} />
+            <DurationControl key={cur.id} value={cur.durationSec} onChange={(v) => { ed.setDuration(sel, v); resetPlayback(); }} />
             <span className="help">
               {DURATION_MIN_SEC}초에서 {DURATION_MAX_SEC}초까지 정할 수 있어요. 문구를 천천히 읽으려면 10초 정도가 좋아요.
             </span>
@@ -426,6 +473,26 @@ export function Editor({ projectId }: { projectId: string }) {
         </section>
       </div>
 
+      {deleteOpen && (
+        <Modal labelledBy="delete-scene-title" onClose={() => setDeleteOpen(false)}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <h2 id="delete-scene-title" style={{ fontSize: 20, fontWeight: 700 }}>
+              장면 {sel + 1}을 삭제할까요?
+            </h2>
+            <p style={{ color: 'var(--text-2)', textWrap: 'pretty' }}>
+              이 장면의 문구, 길이, 이미지가 지워지고 되돌릴 수 없어요. 뒤에 있는 장면은 번호가 하나씩 당겨져요. 이미 만든 영상에는 영향이 없어요.
+            </p>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+            <button className="btn btn-secondary" data-autofocus onClick={() => setDeleteOpen(false)}>
+              취소
+            </button>
+            <button className="btn btn-danger" onClick={() => void confirmDeleteScene()} data-testid="confirm-delete-scene">
+              삭제
+            </button>
+          </div>
+        </Modal>
+      )}
       {confirmOpen && (
         <ConfirmModal
           title={draft.title}

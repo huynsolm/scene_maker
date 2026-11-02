@@ -121,7 +121,7 @@ export function ProjectList() {
                     </div>
                   </div>
                   <span className="wide-only" style={{ color: 'var(--text-2)' }}>
-                    장면 3개 · {p.totalSec}초
+                    장면 {p.sceneCount}개 · {p.totalSec}초
                   </span>
                   <span className="wide-only" style={{ color: 'var(--text-2)' }}>
                     {formatUpdated(p.updatedAt)}
@@ -146,7 +146,7 @@ export function ProjectList() {
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                 <h2 style={{ fontSize: 20, fontWeight: 700 }}>아직 만든 영상이 없어요</h2>
                 <p style={{ color: 'var(--text-3)', maxWidth: 400, textWrap: 'pretty' }}>
-                  제목과 장면 3개만 채우면 30초짜리 안내 영상을 만들 수 있어요.
+                  제목과 장면(문구·이미지·길이)만 채우면 짧은 안내 영상을 만들 수 있어요.
                 </p>
               </div>
               <div className="step-chips">
