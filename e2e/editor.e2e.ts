@@ -462,6 +462,42 @@ describe('1단계 화면 흐름', () => {
       await b.close();
     });
 
+    it('새로 불러온 뒤 입력하고 저장 전에 목록으로 나가도 새 입력이 저장된다(이전 세대의 저장이 진행 중이어도)', async () => {
+      const a = await env.newPage();
+      await newProject(a);
+      const id = projectIdOf(a);
+      const b = await env.newPage();
+      await b.goto(`${env.base}/projects/${id}`);
+      await b.getByLabel('영상 제목').waitFor();
+      await a.locator('[data-testid=scene-card-1]').click();
+      await a.getByTestId('delete-scene').click();
+      await a.getByTestId('confirm-delete-scene').click();
+      await eventually(async () => (await cards(a).count()) === 2, 'a: 장면 2개');
+      await b.locator('#scene-text').fill('충돌 유발');
+      await eventually(async () => (await b.getByTestId('scenes-conflict').count()) === 1, '충돌 안내');
+      // 이후의 저장은 서버가 처리하지만 응답은 5초 늦게 돌려준다(이전 세대의 저장이 진행 중인 상태를 만든다)
+      let puts = 0;
+      await b.route(new RegExp(`/api/projects/${id}$`), async (route) => {
+        if (route.request().method() !== 'PUT') return route.continue();
+        puts++;
+        const res = await route.fetch();
+        await new Promise((r) => setTimeout(r, 5000));
+        await route.fulfill({ response: res });
+      });
+      await b.locator('#scene-text').fill('두 번째 입력'); // 이 저장은 409 이며 응답이 늦다
+      await eventually(async () => puts === 1, '이전 세대의 저장이 나감');
+      await b.getByRole('button', { name: '새로 불러오기' }).click();
+      await eventually(async () => (await b.getByTestId('scenes-conflict').count()) === 0 && (await cards(b).count()) === 2, '새로 불러옴');
+      await b.locator('#scene-text').fill('나가기 직전 입력');
+      await b.getByRole('button', { name: '← 프로젝트' }).click(); // 자동 저장(900ms) 전에 나간다
+      await eventually(async () => {
+        const server = await fetch(`${env.base}/api/projects/${id}`).then((r) => r.json());
+        return server.project.scenes[0].text === '나가기 직전 입력';
+      }, '나가기 직전 입력이 서버에 저장됨', 8000);
+      await a.close();
+      await b.close();
+    });
+
     it('다른 화면에서 장면이 바뀌면 저장이 거절되고 안내 후 새로 불러올 수 있다(지운 장면이 되살아나지 않는다)', async () => {
       const a = await env.newPage();
       await newProject(a);

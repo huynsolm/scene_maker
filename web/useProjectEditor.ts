@@ -105,7 +105,9 @@ export function useProjectEditor(id: string, onToast: (msg: string) => void) {
       alive.current = false;
       clearTimeout(timer.current);
       // 화면을 떠날 때 아직 못 보낸 변경이 있으면 한 번 더 시도한다(결과는 기다리지 않는다).
-      if (draftRef.current && version.current !== savedVersion.current && !inFlight.current) {
+      // 진행 중인 저장이 **현재 세대**의 것일 때만 건너뛴다. 이전 세대의 저장은 응답이 무시되므로, 새로 불러온 뒤의 입력은 여기서 보내야 한다.
+      const running = inFlight.current;
+      if (draftRef.current && version.current !== savedVersion.current && !(running && running.gen === loadGen.current)) {
         void api.saveProject(id, toSendBody(draftRef.current)).catch(() => undefined);
       }
     };
