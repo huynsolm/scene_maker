@@ -26,7 +26,7 @@ interface Case {
   label: string;
   scenes: number;
   seconds: number;
-  image: 'png720' | 'jpeg4096';
+  image: 'png720' | 'jpeg4096' | 'phone12mp';
 }
 
 const CASES: Case[] = [
@@ -34,13 +34,18 @@ const CASES: Case[] = [
   { id: 'B', label: '장면 10개 x 3초(짧은 장면 많음)', scenes: 10, seconds: 3, image: 'png720' },
   { id: 'C', label: '최대 길이: 10장면 x 30초 = 300초', scenes: 10, seconds: 30, image: 'png720' },
   { id: 'D', label: '최대 길이 + 큰 사진(4096x4096 JPEG)', scenes: 10, seconds: 30, image: 'jpeg4096' },
+  { id: 'E', label: '일반적인 3장면 x 10초 + 휴대폰 사진(4032x3024 JPEG)', scenes: 3, seconds: 10, image: 'phone12mp' },
+  { id: 'F', label: '10장면 x 10초 + 휴대폰 사진(4032x3024 JPEG)', scenes: 10, seconds: 10, image: 'phone12mp' },
 ];
 
 const TEXT = '매장에 우유가 부족한지 확인하기 어려우셨나요? 재고 화면에서 현재 수량과 부족한 품목을 확인하세요.';
 
 function makeImage(dir: string, kind: Case['image']): Buffer {
-  const out = path.join(dir, kind === 'png720' ? 'img.png' : 'img.jpg');
-  if (kind === 'png720') {
+  const out = path.join(dir, kind === 'png720' ? 'img.png' : `img-${kind}.jpg`);
+  if (kind === 'phone12mp') {
+    // 휴대폰 사진 크기(4032x3024)와 비슷한 잡음 있는 JPEG(보통 3~6MB)
+    execFileSync('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc2=s=4032x3024:d=1', '-vf', 'noise=alls=18:allf=t', '-frames:v', '1', '-q:v', '3', out]);
+  } else if (kind === 'png720') {
     execFileSync('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc2=s=1280x720:d=1', '-frames:v', '1', out]);
   } else {
     // 사진처럼 잡음이 있는 4096x4096 JPEG. 10MB 한도 안에서 가장 큰 쪽으로 맞춘다.
