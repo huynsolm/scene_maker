@@ -128,7 +128,14 @@ export function Editor({ projectId }: { projectId: string }) {
 
   // 영상 생성 요청. 서버는 '저장된' 내용으로 만들기 때문에 먼저 대기 중인 변경을 모두 저장한다.
   const startRender = async () => {
-    if (startingRef.current || ed.structuring) return; // 연속 클릭 방지, 장면을 바꾸는 중에는 시작하지 않는다(서버도 진행 중이면 새 작업을 만들지 않는다)
+    if (startingRef.current || ed.structuring) return; // 연속 클릭 방지(서버도 진행 중이면 새 작업을 만들지 않는다), 장면을 바꾸는 중에는 시작하지 않는다
+    // 장면 구성을 믿을 수 없으면(다른 곳에서 바뀜, 응답이 없어 결과 불명) 만들지 않는다. 확인 창이 보여 준 장면 수·길이와 서버가
+    // 스냅샷으로 만드는 내용이 달라질 수 있다. 새로 불러오면 풀린다.
+    if (ed.conflict) {
+      setConfirmOpen(false);
+      toast.show('장면 구성을 먼저 새로 불러와 주세요');
+      return;
+    }
     startingRef.current = true;
     setStarting(true);
     try {
@@ -216,7 +223,7 @@ export function Editor({ projectId }: { projectId: string }) {
             생성 진행 상황 보기
           </button>
         ) : (
-          <button className="btn btn-primary" onClick={() => setConfirmOpen(true)} disabled={ed.structuring} data-testid="open-render">
+          <button className="btn btn-primary" onClick={() => setConfirmOpen(true)} disabled={ed.structuring || !!ed.conflict} title={ed.conflict ? '새로 불러온 뒤에 영상을 만들 수 있어요' : undefined} data-testid="open-render">
             영상 만들기
           </button>
         )}

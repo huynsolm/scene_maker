@@ -646,6 +646,33 @@ describe('1단계 화면 흐름', () => {
       await page.close();
     });
 
+    it('결과를 알 수 없는 상태에서는 이미 열려 있던 영상 만들기 확인 창으로도 영상을 만들 수 없다', async () => {
+      const p = completeProject('결과 불명 중 생성');
+      const page = await env.newPage();
+      await shortTimeout(page);
+      await page.goto(`${env.base}/projects/${p.id}`);
+      await page.getByLabel('영상 제목').waitFor();
+      await page.route(new RegExp(`/api/projects/${p.id}/scenes$`), async (route) => {
+        if (route.request().method() !== 'POST') return route.continue();
+        const res = await route.fetch(); // 서버는 장면을 추가하지만 응답은 제한 시간 안에 오지 않는다
+        await new Promise((r) => setTimeout(r, 4000));
+        await route.fulfill({ response: res }).catch(() => undefined);
+      });
+      const renders: string[] = [];
+      page.on('request', (r) => r.method() === 'POST' && /\/renders$/.test(r.url()) && renders.push(r.url()));
+      await page.getByTestId('open-render').click(); // 확인 창을 먼저 연다(이 버튼은 충돌 상태가 아닐 때 켜져 있다)
+      await page.getByTestId('add-scene').evaluate((el: HTMLButtonElement) => el.click()); // 창이 가리므로 DOM 으로 누른다
+      await eventually(hasText(page, '[data-testid=scenes-conflict]', '알 수 없어요'), '결과를 알 수 없다는 안내', 8000);
+      await page.getByRole('button', { name: '영상 만들기 시작' }).click(); // 확인 창의 이 버튼은 훅·화면의 검사까지 도달한다
+      await new Promise((r) => setTimeout(r, 1500));
+      expect(renders).toEqual([]); // 영상 요청이 서버로 나가지 않았다
+      const latest = await fetch(`${env.base}/api/projects/${p.id}/renders/latest`).then((r) => r.json());
+      expect(latest.job).toBeNull();
+      expect(await page.getByRole('dialog').count()).toBe(0); // 확인 창은 닫히고
+      expect(await page.getByTestId('open-render').isDisabled()).toBe(true); // 헤더 버튼은 새로 불러올 때까지 막힌다
+      await page.close();
+    });
+
     it('줄 서 있는 요청이 영영 응답하지 않아도, 시간 제한 뒤에는 새로 불러오기가 끝난다', async () => {
       const a = await env.newPage();
       await newProject(a);
