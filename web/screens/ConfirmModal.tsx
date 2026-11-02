@@ -24,7 +24,7 @@ export function ConfirmModal({ title, totalSec, durations, missing, onClose, onF
           {hasMissing ? '아직 채우지 않은 항목이 있어요' : '이 내용으로 영상을 만들까요?'}
         </h2>
         <p style={{ color: 'var(--text-2)' }}>
-          {hasMissing ? '빠진 항목을 채우면 바로 영상을 만들 수 있어요.' : '장면 3개가 순서대로 이어지는 MP4 영상을 만들어요.'}
+          {hasMissing ? '빠진 항목을 채우면 바로 영상을 만들 수 있어요.' : `장면 ${durations.length}개가 순서대로 이어지는 MP4 영상을 만들어요.`}
         </p>
       </div>
 

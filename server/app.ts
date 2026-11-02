@@ -79,7 +79,7 @@ export async function buildApp(config: AppConfig, deps: { renderer?: Renderer } 
   });
 
   type IdParams = { Params: { id: string } };
-  type SceneParams = { Params: { id: string; position: string } };
+  type SceneParams = { Params: { id: string; sceneId: string } };
 
   app.get('/api/projects', async () => ({ projects: store.listProjects() }));
 
@@ -100,15 +100,24 @@ export async function buildApp(config: AppConfig, deps: { renderer?: Renderer } 
     return reply.status(204).send();
   });
 
-  app.post<SceneParams>('/api/projects/:id/scenes/:position/image', async (req) => {
+  app.post<IdParams>('/api/projects/:id/scenes', async (req, reply) => {
+    reply.status(201);
+    return { project: store.addScene(req.params.id) };
+  });
+
+  app.delete<SceneParams>('/api/projects/:id/scenes/:sceneId', async (req) => ({
+    project: store.deleteScene(req.params.id, req.params.sceneId),
+  }));
+
+  app.post<SceneParams>('/api/projects/:id/scenes/:sceneId/image', async (req) => {
     const file = await req.file();
     if (!file) throw new AppError('IMAGE_MISSING_FILE', 400, '이미지 파일을 선택해 주세요.');
     const buf = await file.toBuffer(); // 10MB 를 넘으면 FST_REQ_FILE_TOO_LARGE
-    return { project: store.attachImage(req.params.id, Number(req.params.position), buf, file.filename) };
+    return { project: store.attachImage(req.params.id, req.params.sceneId, buf, file.filename) };
   });
 
-  app.delete<SceneParams>('/api/projects/:id/scenes/:position/image', async (req) => ({
-    project: store.removeImage(req.params.id, Number(req.params.position)),
+  app.delete<SceneParams>('/api/projects/:id/scenes/:sceneId/image', async (req) => ({
+    project: store.removeImage(req.params.id, req.params.sceneId),
   }));
 
   // 영상 생성: 요청(POST)과 상태 조회(GET)를 분리한다. 요청은 접수만 하고 바로 돌려준다.

@@ -20,17 +20,55 @@ export function SampleTag() {
   );
 }
 
+const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+/**
+ * 대화 상자. 열리면 안전한 쪽(취소/닫기, `data-autofocus`)에 초점을 두고, Tab 이 상자 안에서만 돌게 하며,
+ * 닫히면 열기 전에 초점이 있던 요소로 돌려놓는다. Esc 로 닫는다.
+ */
 export function Modal({ labelledBy, onClose, children }: { labelledBy: string; onClose: () => void; children: ReactNode }) {
   const ref = useRef<HTMLDivElement>(null);
+  // onClose 는 부모가 렌더할 때마다 새 함수일 수 있다. 열고 닫는 동작(초점 이동·복귀)이 렌더마다 다시 실행되지 않게 ref 로 읽는다.
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
   useEffect(() => {
-    const on = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    const opener = document.activeElement as HTMLElement | null;
+    const box = ref.current;
+    (box?.querySelector<HTMLElement>('[data-autofocus]') ?? box?.querySelector<HTMLElement>(FOCUSABLE))?.focus();
+    const on = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        closeRef.current();
+        return;
+      }
+      if (e.key !== 'Tab' || !box) return;
+      const items = Array.from(box.querySelectorAll<HTMLElement>(FOCUSABLE)).filter((el) => el.offsetParent !== null);
+      if (items.length === 0) {
+        e.preventDefault();
+        return;
+      }
+      const first = items[0]!;
+      const last = items[items.length - 1]!;
+      const active = document.activeElement;
+      if (!box.contains(active)) {
+        e.preventDefault();
+        (e.shiftKey ? last : first).focus();
+      } else if (e.shiftKey && active === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && active === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
     window.addEventListener('keydown', on);
-    // 열릴 때 안전한 쪽(취소/닫기)으로 포커스를 둔다.
-    ref.current?.querySelector<HTMLElement>('[data-autofocus]')?.focus();
-    return () => window.removeEventListener('keydown', on);
-  }, [onClose]);
+    return () => {
+      window.removeEventListener('keydown', on);
+      // 열기 전의 요소가 아직 화면에 있고 쓸 수 있으면 거기로 돌아간다(없으면 브라우저 기본 동작에 맡긴다).
+      if (opener && document.contains(opener) && !(opener as HTMLButtonElement).disabled) opener.focus();
+    };
+  }, []);
   return (
-    <div className="overlay" onClick={onClose}>
+    <div className="overlay" onClick={() => closeRef.current()}>
       <div ref={ref} className="modal" role="dialog" aria-modal="true" aria-labelledby={labelledBy} onClick={(e) => e.stopPropagation()}>
         {children}
       </div>

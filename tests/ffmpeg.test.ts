@@ -153,6 +153,37 @@ d('실제 ffmpeg 렌더링', () => {
     }
   }, 120_000);
 
+  it('장면이 1개인 영상과 5개인 영상도 장면 수에 맞는 길이로 만들어지고 장면 전환 시각이 정확하다', async () => {
+    const a = await makeApp(undefined, {});
+    apps.push(a.app);
+    const colors: Array<[number, number, number]> = [[200, 40, 40], [40, 200, 40], [40, 40, 200], [200, 200, 40], [40, 200, 200]];
+    const build = async (title: string, durations: number[]) => {
+      const p = a.store.createProject({ title });
+      // 기본 3개를 원하는 개수로 맞춘다
+      for (let n = 3; n < durations.length; n++) await a.app.inject({ method: 'POST', url: `/api/projects/${p.id}/scenes` });
+      let cur = a.store.getProject(p.id);
+      for (const sc of cur.scenes.slice(durations.length)) await a.app.inject({ method: 'DELETE', url: `/api/projects/${p.id}/scenes/${sc.id}` });
+      cur = a.store.getProject(p.id);
+      a.store.saveProject(p.id, { title, scenes: cur.scenes.map((sc, i) => ({ id: sc.id, text: `장면 ${i + 1}`, durationSec: durations[i]! })) });
+      for (let i = 0; i < durations.length; i++) expect((await upload(a.app, p.id, i, solidPng(1280, 720, colors[i]!))).statusCode).toBe(200);
+      const j = (await a.app.inject({ method: 'POST', url: `/api/projects/${p.id}/renders` })).json().job;
+      await waitFor(async () => {
+        const v = (await a.app.inject({ url: `/api/renders/${j.id}` })).json().job;
+        if (v.status === 'failed') throw new Error(JSON.stringify(v.error));
+        return v.status === 'done' ? v : null;
+      }, '렌더 완료', 90_000);
+      return a.renders.videoPathFor(p.id, j.id);
+    };
+    const one = await build('장면 하나', [4]);
+    expect(Math.abs(Number(probe(one).format.duration) - 4)).toBeLessThan(0.1);
+    expect(near(px(frame(one, 2), 4, 4), colors[0]!, 4)).toBe(true);
+
+    const five = await build('장면 다섯', [3, 4, 3, 5, 3]); // 전환: 3, 7, 10, 15
+    expect(Math.abs(Number(probe(five).format.duration) - 18)).toBeLessThan(0.1);
+    const at = [[2.9, 0], [3.1, 1], [6.9, 1], [7.1, 2], [9.9, 2], [10.1, 3], [14.9, 3], [15.1, 4]] as const;
+    for (const [t, idx] of at) expect(near(px(frame(five, t), 4, 4), colors[idx]!, 4), `${t}초 = 장면 ${idx + 1}`).toBe(true);
+  }, 180_000);
+
   it('EXIF 회전 JPEG 는 사진 앱에서 보이는 방향으로, 투명 PNG 는 프레임 배경색 위에 합성되어 나온다(미리보기와 같은 모양)', async () => {
     const a = await makeApp(undefined, {});
     apps.push(a.app);

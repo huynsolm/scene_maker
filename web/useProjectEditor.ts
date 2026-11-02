@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Project } from '../shared/types';
 import { ApiFailure, api, type SaveBody } from './api';
 import { hm } from './format';
+import { mergeImages } from './mergeImages';
 import { precheckImage } from './rules';
 import { fitCleaned, cleanText, cleanTitle } from '../shared/text';
 import { TEXT_MAX_LENGTH, TITLE_MAX_LENGTH } from '../shared/limits';
@@ -34,13 +35,15 @@ export function useProjectEditor(id: string, onToast: (msg: string) => void) {
   const [save, setSave] = useState<SaveState>('saved');
   const [savedAt, setSavedAt] = useState('');
   const [saveError, setSaveError] = useState<string | null>(null);
-  const [uploading, setUploading] = useState<number | null>(null);
+  const [uploading, setUploading] = useState<string | null>(null); // 업로드 중인 장면 ID(장면이 지워져도 다른 장면에 표시되지 않게 ID 로 둔다)
+  const [conflict, setConflict] = useState(false); // 서버의 장면 구성이 이 화면과 달라졌다(저장이 409 로 거절됨)
+  const [structuring, setStructuring] = useState(false); // 장면 추가·삭제 진행 중
 
   const draftRef = useRef<SaveBody | null>(null);
   const version = useRef(0); // 편집할 때마다 증가
   const savedVersion = useRef(0); // 서버에 반영이 확인된 마지막 버전
-  const inFlight = useRef(false);
-  const inFlightDone = useRef<Promise<boolean>>(Promise.resolve(true));
+  // 진행 중인 저장 작업(세대별). 새로 불러오면 이전 세대의 작업은 응답이 무시되므로, 새 세대의 저장은 그 작업을 기다리지 않고 따로 시작한다.
+  const inFlight = useRef<{ gen: number; done: Promise<boolean> } | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const alive = useRef(true);
   const saveFailedRef = useRef(false);
@@ -48,26 +51,52 @@ export function useProjectEditor(id: string, onToast: (msg: string) => void) {
   const composing = useRef(false);
   // 조합 중에 도착해 반영하지 못한 서버 응답(정리된 값)과 그 응답이 대응하는 편집 버전. 조합이 끝나면 아직 최신일 때만 반영한다.
   const pendingSync = useRef<{ version: number; body: SaveBody } | null>(null);
+  // 장면 추가·삭제 중에는 자동 저장이 장면 목록이 바뀌기 전의 ID 로 나가지 않게 기다린다.
+  const structural = useRef<Promise<unknown> | null>(null);
+  const structuralBusy = useRef(false); // 동시에 하나만(연속 클릭 방지)
+  // 서버를 바꾸는 요청(이미지 업로드·삭제, 장면 추가·삭제)은 한 줄로 세운다. 동시에 보내면 서버가 처리한 순서와 응답이 도착하는 순서가
+  // 달라져, 늦게 도착한 오래된 응답이 최신 화면(이미지·장면 목록)을 덮는다.
+  const queue = useRef<Promise<unknown>>(Promise.resolve());
+  const enqueue = <T,>(fn: () => Promise<T>): Promise<T> => {
+    const run = queue.current.then(fn);
+    queue.current = run.catch(() => undefined);
+    return run;
+  };
+  /** 줄 서 있다가 차례가 왔을 때 화면이 이미 새로 불러와졌다면(세대가 다르면) 요청을 보내지 않고 null 을 돌려준다. */
+  const enqueueFor = <T,>(gen: number, fn: () => Promise<T>): Promise<T | null> =>
+    enqueue(async () => (gen !== loadGen.current ? null : fn()));
+  // 화면을 새로 불러올 때마다 올린다. 이전 세대에서 시작한 요청의 응답(성공이든 실패든)은 새 화면에 반영하지 않는다.
+  const loadGen = useRef(0);
+  // 서버가 받아 준 가장 큰 편집 버전(현재 세대). 화면을 떠난 뒤 도착한 응답도 기록해, 떠난 뒤의 마지막 저장이 중복·누락되지 않게 한다.
+  const sentOk = useRef(0);
 
   const load = useCallback(async () => {
+    const gen = ++loadGen.current;
     setLoadState('loading');
     try {
+      // 이미 서버로 나간 이미지·장면 요청은 끝나기를 기다린 뒤 읽는다(그래야 읽은 내용에 그 결과가 들어 있다).
+      // 아직 나가지 않고 줄 서 있던 요청은 세대가 달라져서 실행되지 않는다(enqueueFor).
+      await queue.current;
       const p = await api.getProject(id);
-      if (!alive.current) return;
+      if (!alive.current || gen !== loadGen.current) return;
       const d: SaveBody = {
         title: p.title,
-        scenes: p.scenes.map((s) => ({ text: s.text, durationSec: s.durationSec })),
+        scenes: p.scenes.map((s) => ({ id: s.id, text: s.text, durationSec: s.durationSec })),
       };
       draftRef.current = d;
       version.current = 0;
       savedVersion.current = 0;
+      sentOk.current = 0;
       setProject(p);
       setDraft(d);
+      setConflict(false);
+      saveFailedRef.current = false;
+      setSaveError(null);
       setSave('saved');
       setSavedAt(hm(new Date(p.updatedAt)));
       setLoadState('ready');
     } catch (e) {
-      if (!alive.current) return;
+      if (!alive.current || gen !== loadGen.current) return;
       setLoadState(e instanceof ApiFailure && e.status === 404 ? 'notfound' : 'error');
     }
   }, [id]);
@@ -79,8 +108,18 @@ export function useProjectEditor(id: string, onToast: (msg: string) => void) {
       alive.current = false;
       clearTimeout(timer.current);
       // 화면을 떠날 때 아직 못 보낸 변경이 있으면 한 번 더 시도한다(결과는 기다리지 않는다).
-      if (draftRef.current && version.current !== savedVersion.current && !inFlight.current) {
-        void api.saveProject(id, toSendBody(draftRef.current)).catch(() => undefined);
+      // 화면 안의 이동(목록, 결과 화면)은 이동 전에 saveNow 로 저장하므로 여기는 브라우저 뒤로 가기 같은 이동의 마지막 보루다.
+      const running = inFlight.current;
+      const sendLatest = () => void api.saveProject(id, toSendBody(draftRef.current!)).catch(() => undefined);
+      if (!draftRef.current) return;
+      if (running && running.gen === loadGen.current) {
+        // 현재 세대의 저장이 이미 나가 있다. 동시에 보내면 오래된 본문이 나중에 도착해 최신 본문을 덮을 수 있으므로,
+        // 그 저장이 끝난 뒤에 그 사이 더 입력한 내용이 있을 때만 이어서 보낸다.
+        void running.done.finally(() => {
+          if (draftRef.current && version.current > sentOk.current) sendLatest();
+        });
+      } else if (version.current !== savedVersion.current) {
+        sendLatest();
       }
     };
   }, [id, load]);
@@ -97,10 +136,12 @@ export function useProjectEditor(id: string, onToast: (msg: string) => void) {
   const send = useCallback(async (): Promise<boolean> => {
     const body = toSendBody(draftRef.current!);
     const sentVersion = version.current;
+    const gen = loadGen.current;
     setSave('saving');
     try {
       const p = await api.saveProject(id, body);
-      if (!alive.current) return false;
+      if (gen === loadGen.current) sentOk.current = Math.max(sentOk.current, sentVersion);
+      if (!alive.current || gen !== loadGen.current) return false; // 그 사이 화면을 새로 불러왔다면 이 응답은 지난 화면의 것이다
       savedVersion.current = Math.max(savedVersion.current, sentVersion);
       saveFailedRef.current = false;
       setProject((prev) => (prev ? { ...prev, status: p.status, updatedAt: p.updatedAt } : prev));
@@ -112,7 +153,7 @@ export function useProjectEditor(id: string, onToast: (msg: string) => void) {
         // 들어온 보이지 않는 문자가 화면에는 남고 저장값에서는 사라져 "저장됨"인데 둘이 다른 상태가 되지 않도록,
         // 그 사이 더 고친 것이 없으면 정리된 값으로 draft 를 맞춘다(version 은 올리지 않으므로 다시 저장하지 않는다).
         // IME 조합 중에는 입력칸의 값을 바꾸면 조합이 깨지므로 응답을 보관했다가 조합이 끝난 뒤 반영한다(setComposing).
-        const saved: SaveBody = { title: p.title, scenes: p.scenes.map((s) => ({ text: s.text, durationSec: s.durationSec })) };
+        const saved: SaveBody = { title: p.title, scenes: p.scenes.map((s) => ({ id: s.id, text: s.text, durationSec: s.durationSec })) };
         if (composing.current) pendingSync.current = { version: sentVersion, body: saved };
         else {
           pendingSync.current = null;
@@ -121,7 +162,9 @@ export function useProjectEditor(id: string, onToast: (msg: string) => void) {
       }
       return true;
     } catch (e) {
+      if (gen !== loadGen.current) return false; // 새로 불러오기 전에 보낸 요청의 실패는 새 화면의 상태가 아니다
       saveFailedRef.current = true;
+      if (alive.current && e instanceof ApiFailure && e.code === 'SCENES_CHANGED') setConflict(true);
       if (alive.current) {
         setSaveError(e instanceof Error ? e.message : '저장하지 못했어요.');
         setSave('failed');
@@ -135,20 +178,24 @@ export function useProjectEditor(id: string, onToast: (msg: string) => void) {
    * 최신 내용을 이어서 보낸다. 이미 진행 중이면 그 작업이 끝나기를 기다린다. 실패하면 false(draft 는 그대로).
    */
   const flush = useCallback((): Promise<boolean> => {
-    if (inFlight.current) return inFlightDone.current;
+    const running = inFlight.current;
+    if (running && running.gen === loadGen.current) return running.done;
     if (!draftRef.current || version.current === savedVersion.current) return Promise.resolve(true);
-    inFlight.current = true;
-    inFlightDone.current = (async () => {
+    const gen = loadGen.current;
+    const entry: { gen: number; done: Promise<boolean> } = { gen, done: Promise.resolve(true) };
+    inFlight.current = entry; // 비동기 본문이 await 없이 끝나도 finally 가 이 항목을 지울 수 있게 먼저 등록한다
+    entry.done = (async () => {
       try {
-        while (alive.current && version.current !== savedVersion.current) {
+        if (structural.current) await structural.current.catch(() => undefined); // 장면 목록이 바뀌는 중이면 끝난 뒤 새 ID 로 보낸다
+        while (alive.current && gen === loadGen.current && version.current !== savedVersion.current) {
           if (!(await send())) return false;
         }
         return true;
       } finally {
-        inFlight.current = false;
+        if (inFlight.current === entry) inFlight.current = null;
       }
     })();
-    return inFlightDone.current;
+    return entry.done;
   }, [send]);
 
   /**
@@ -156,6 +203,8 @@ export function useProjectEditor(id: string, onToast: (msg: string) => void) {
    * 영상 생성은 서버에 저장된 내용을 기준으로 만들기 때문에, 요청 직전에 반드시 호출한다.
    */
   const saveNow = useCallback(async (): Promise<boolean> => {
+    // 줄 서 있는 이미지 업로드·장면 추가·삭제가 끝난 뒤의 상태를 저장한다(끝나기 전에 영상을 요청하면 이전 내용으로 만들어진다).
+    await queue.current;
     clearTimeout(timer.current);
     const ok = await flush();
     return ok && version.current === savedVersion.current;
@@ -190,7 +239,7 @@ export function useProjectEditor(id: string, onToast: (msg: string) => void) {
   const applyImages = (p: Project) =>
     setProject((prev) =>
       prev
-        ? { ...prev, status: p.status, updatedAt: p.updatedAt, scenes: prev.scenes.map((s, j) => ({ ...s, image: p.scenes[j]?.image ?? null })) }
+        ? { ...prev, status: p.status, updatedAt: p.updatedAt, scenes: mergeImages(prev.scenes, p.scenes) }
         : prev,
     );
 
@@ -200,23 +249,88 @@ export function useProjectEditor(id: string, onToast: (msg: string) => void) {
       onToast(problem);
       return;
     }
-    setUploading(position);
+    const sceneId = draftRef.current!.scenes[position]!.id!;
+    const gen = loadGen.current;
+    setUploading(sceneId);
     try {
-      applyImages(await api.uploadImage(id, position, file));
+      const p = await enqueueFor(gen, () => api.uploadImage(id, sceneId, file));
+      if (p && gen === loadGen.current) applyImages(p);
     } catch (e) {
-      onToast(e instanceof Error ? e.message : '이미지를 올리지 못했어요');
+      if (gen === loadGen.current) onToast(e instanceof Error ? e.message : '이미지를 올리지 못했어요');
     } finally {
-      if (alive.current) setUploading(null);
+      if (alive.current) setUploading((cur) => (cur === sceneId ? null : cur));
     }
   };
 
   const removeImage = async (position: number) => {
+    const sceneId = draftRef.current!.scenes[position]!.id!;
+    const gen = loadGen.current;
     try {
-      applyImages(await api.removeImage(id, position));
+      const p = await enqueueFor(gen, () => api.removeImage(id, sceneId));
+      if (p && gen === loadGen.current) applyImages(p);
     } catch (e) {
-      onToast(e instanceof Error ? e.message : '이미지를 지우지 못했어요');
+      if (gen === loadGen.current) onToast(e instanceof Error ? e.message : '이미지를 지우지 못했어요');
     }
   };
+
+  /**
+   * 장면을 추가·삭제한다. 먼저 대기 중인 변경을 저장하고, 서버가 돌려준 장면 목록을 화면의 draft 에 합친다.
+   * 합칠 때 같은 ID 의 장면은 화면(draft)의 문구·길이를 유지한다 — 요청하는 사이에 더 입력한 내용이 사라지지 않게 한다.
+   * 성공하면 서버가 돌려준 프로젝트, 실패하면(토스트 표시) null.
+   */
+  const changeScenes = async (call: () => Promise<Project>): Promise<Project | null> => {
+    if (structuralBusy.current || !draftRef.current) return null;
+    structuralBusy.current = true;
+    setStructuring(true);
+    const gen = loadGen.current;
+    try {
+      return await enqueue(async () => {
+        if (gen !== loadGen.current) return null;
+        clearTimeout(timer.current);
+        if (!(await flush())) {
+          onToast('저장하지 못해서 장면을 바꿀 수 없어요. 다시 저장한 뒤 시도해 주세요');
+          return null;
+        }
+        const op = (async () => {
+          const p = await call();
+          if (gen !== loadGen.current) return null; // 그 사이 화면을 새로 불러왔다
+          const cur = draftRef.current!;
+          const byId = new Map(cur.scenes.map((s) => [s.id, s]));
+          const next: SaveBody = {
+            title: cur.title,
+            scenes: p.scenes.map((s) => byId.get(s.id) ?? { id: s.id, text: s.text, durationSec: s.durationSec }),
+          };
+          draftRef.current = next;
+          setDraft(next);
+          setProject(p);
+          return p;
+        })();
+        structural.current = op;
+        try {
+          return await op;
+        } finally {
+          structural.current = null;
+        }
+      });
+    } catch (e) {
+      if (gen === loadGen.current) {
+        if (e instanceof ApiFailure && e.code === 'NOT_FOUND') setConflict(true);
+        onToast(e instanceof Error ? e.message : '장면을 바꾸지 못했어요');
+      }
+      return null;
+    } finally {
+      structuralBusy.current = false;
+      if (alive.current) setStructuring(false);
+    }
+  };
+
+  /** 맨 뒤에 장면을 추가한다. 성공하면 새 장면의 위치(0부터), 실패하면 null. */
+  const addScene = async (): Promise<number | null> => {
+    const p = await changeScenes(() => api.addScene(id));
+    return p ? p.scenes.length - 1 : null;
+  };
+
+  const deleteScene = async (sceneId: string): Promise<boolean> => (await changeScenes(() => api.deleteScene(id, sceneId))) !== null;
 
   // 저장되지 않은 변경이 있는 채로 탭을 닫거나 새로고침하면 브라우저가 한 번 확인한다.
   useEffect(() => {
@@ -233,6 +347,7 @@ export function useProjectEditor(id: string, onToast: (msg: string) => void) {
   return {
     loadState, reload: load, project, draft, save, savedAt, saveError, uploading,
     setTitle, setText, setDuration, retrySave, saveNow, uploadImage, removeImage,
+    addScene, deleteScene, structuring, conflict,
     setComposing: (v: boolean) => {
       composing.current = v;
       if (v) return;

@@ -66,9 +66,12 @@ export async function upload(
 ) {
   const form = new FormData();
   form.append('file', data, { filename, contentType });
+  // 위치(0부터)로 받은 호출을 장면 ID 경로로 바꾼다. 범위 밖 위치는 존재하지 않는 장면 ID 로 보내 404 를 확인할 수 있게 한다.
+  const project = (await app.inject({ url: `/api/projects/${projectId}` })).json().project;
+  const sceneId = project?.scenes?.[position]?.id ?? '00000000-0000-4000-8000-000000000000';
   return app.inject({
     method: 'POST',
-    url: `/api/projects/${projectId}/scenes/${position}/image`,
+    url: `/api/projects/${projectId}/scenes/${sceneId}/image`,
     payload: form.getBuffer(),
     headers: form.getHeaders(),
   });
