@@ -67,6 +67,8 @@ export function useProjectEditor(id: string, onToast: (msg: string) => void) {
     enqueue(async () => (gen !== loadGen.current ? null : fn()));
   // 화면을 새로 불러올 때마다 올린다. 이전 세대에서 시작한 요청의 응답(성공이든 실패든)은 새 화면에 반영하지 않는다.
   const loadGen = useRef(0);
+  // 서버가 받아 준 가장 큰 편집 버전(현재 세대). 화면을 떠난 뒤 도착한 응답도 기록해, 떠난 뒤의 마지막 저장이 중복·누락되지 않게 한다.
+  const sentOk = useRef(0);
 
   const load = useCallback(async () => {
     const gen = ++loadGen.current;
@@ -84,6 +86,7 @@ export function useProjectEditor(id: string, onToast: (msg: string) => void) {
       draftRef.current = d;
       version.current = 0;
       savedVersion.current = 0;
+      sentOk.current = 0;
       setProject(p);
       setDraft(d);
       setConflict(false);
@@ -105,10 +108,18 @@ export function useProjectEditor(id: string, onToast: (msg: string) => void) {
       alive.current = false;
       clearTimeout(timer.current);
       // 화면을 떠날 때 아직 못 보낸 변경이 있으면 한 번 더 시도한다(결과는 기다리지 않는다).
-      // 진행 중인 저장이 **현재 세대**의 것일 때만 건너뛴다. 이전 세대의 저장은 응답이 무시되므로, 새로 불러온 뒤의 입력은 여기서 보내야 한다.
+      // 화면 안의 이동(목록, 결과 화면)은 이동 전에 saveNow 로 저장하므로 여기는 브라우저 뒤로 가기 같은 이동의 마지막 보루다.
       const running = inFlight.current;
-      if (draftRef.current && version.current !== savedVersion.current && !(running && running.gen === loadGen.current)) {
-        void api.saveProject(id, toSendBody(draftRef.current)).catch(() => undefined);
+      const sendLatest = () => void api.saveProject(id, toSendBody(draftRef.current!)).catch(() => undefined);
+      if (!draftRef.current) return;
+      if (running && running.gen === loadGen.current) {
+        // 현재 세대의 저장이 이미 나가 있다. 동시에 보내면 오래된 본문이 나중에 도착해 최신 본문을 덮을 수 있으므로,
+        // 그 저장이 끝난 뒤에 그 사이 더 입력한 내용이 있을 때만 이어서 보낸다.
+        void running.done.finally(() => {
+          if (draftRef.current && version.current > sentOk.current) sendLatest();
+        });
+      } else if (version.current !== savedVersion.current) {
+        sendLatest();
       }
     };
   }, [id, load]);
@@ -129,6 +140,7 @@ export function useProjectEditor(id: string, onToast: (msg: string) => void) {
     setSave('saving');
     try {
       const p = await api.saveProject(id, body);
+      if (gen === loadGen.current) sentOk.current = Math.max(sentOk.current, sentVersion);
       if (!alive.current || gen !== loadGen.current) return false; // 그 사이 화면을 새로 불러왔다면 이 응답은 지난 화면의 것이다
       savedVersion.current = Math.max(savedVersion.current, sentVersion);
       saveFailedRef.current = false;

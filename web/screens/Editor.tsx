@@ -41,6 +41,7 @@ export function Editor({ projectId }: { projectId: string }) {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [starting, setStarting] = useState(false);
+  const leavingRef = useRef(false); // 화면 이동 전 저장이 진행 중인지(연속 클릭 방지). 훅이므로 조건부 return 보다 위에 둔다
   const startingRef = useRef(false); // state 는 같은 틱의 두 번째 클릭에는 아직 갱신되지 않아서 ref 로 동기 차단한다
   const fileRef = useRef<HTMLInputElement>(null);
   const titleRef = useRef<HTMLInputElement>(null);
@@ -104,10 +105,21 @@ export function Editor({ projectId }: { projectId: string }) {
   const missing = findMissing(draft.title, scenes.map((s) => ({ text: s.text, hasImage: !!s.image })));
   const textLen = cur.text.trim().length;
 
-  const goBack = () => {
-    if (ed.save === 'failed' && !window.confirm('저장하지 못한 내용이 있어요. 그래도 나갈까요?')) return;
-    navigate('/');
+  // 화면 안의 이동은 대기 중인 입력(디바운스 중이거나 전송 중인 것)을 모두 저장한 뒤에 한다. 이미 나간 저장 뒤에 더 입력한 내용이 있어도
+  // 잃지 않는다. 저장하지 못하면(오프라인, 충돌 등) 확인을 받는다.
+  const saveBeforeLeaving = async (): Promise<boolean> => {
+    if (leavingRef.current) return false; // 연속 클릭 방지
+    leavingRef.current = true;
+    try {
+      return (await ed.saveNow()) || window.confirm('저장하지 못한 내용이 있어요. 그래도 이동할까요?');
+    } finally {
+      leavingRef.current = false;
+    }
   };
+  const leaveTo = async (to: string) => {
+    if (await saveBeforeLeaving()) navigate(to);
+  };
+  const goBack = () => void leaveTo('/');
 
   // 영상 생성 요청. 서버는 '저장된' 내용으로 만들기 때문에 먼저 대기 중인 변경을 모두 저장한다.
   const startRender = async () => {
@@ -185,12 +197,17 @@ export function Editor({ projectId }: { projectId: string }) {
           전체 길이 <strong>{total}초</strong>
         </div>
         {project.lastVideo && (
-          <Link to={`/projects/${projectId}/result/${project.lastVideo.jobId}`} className="btn btn-ghost" style={{ color: 'var(--primary-text)' }}>
+          <Link
+            to={`/projects/${projectId}/result/${project.lastVideo.jobId}`}
+            className="btn btn-ghost"
+            style={{ color: 'var(--primary-text)' }}
+            beforeNavigate={saveBeforeLeaving}
+          >
             마지막 생성 영상 보기
           </Link>
         )}
         {busy ? (
-          <button className="btn btn-soft" onClick={() => navigate(`/projects/${projectId}/result`)}>
+          <button className="btn btn-soft" onClick={() => void leaveTo(`/projects/${projectId}/result`)}>
             생성 진행 상황 보기
           </button>
         ) : (

@@ -498,6 +498,43 @@ describe('1단계 화면 흐름', () => {
       await b.close();
     });
 
+    /** 저장 응답을 늦춰 "저장이 진행 중인 상태"를 만든다(서버는 바로 처리한다). */
+    const slowSaves = async (page: Page, id: string, ms: number) =>
+      page.route(new RegExp(`/api/projects/${id}$`), async (route) => {
+        if (route.request().method() !== 'PUT') return route.continue();
+        const res = await route.fetch();
+        await new Promise((r) => setTimeout(r, ms));
+        await route.fulfill({ response: res });
+      });
+    const serverText = async (id: string) => (await fetch(`${env.base}/api/projects/${id}`).then((r) => r.json())).project.scenes[0].text as string;
+
+    it('저장이 진행 중일 때 더 입력하고 목록으로 이동하면, 이동은 모든 입력이 저장된 뒤에 일어난다', async () => {
+      const page = await env.newPage();
+      await newProject(page);
+      const id = projectIdOf(page);
+      await slowSaves(page, id, 2000);
+      await page.locator('#scene-text').fill('A');
+      await new Promise((r) => setTimeout(r, 1300)); // 디바운스(900ms) 뒤 'A' 저장이 나가 응답을 기다리는 중
+      await page.locator('#scene-text').fill('AB'); // 진행 중인 저장 뒤의 추가 입력
+      await page.getByRole('button', { name: '← 프로젝트' }).click();
+      await page.waitForURL(`${env.base}/`, { timeout: 10000 });
+      expect(await serverText(id)).toBe('AB'); // 이동한 순간 이미 저장돼 있다
+      await page.close();
+    });
+
+    it('브라우저 뒤로 가기로 나갈 때도, 진행 중인 저장 뒤의 추가 입력이 이어서 저장된다', async () => {
+      const page = await env.newPage();
+      await newProject(page); // 목록 → 프로젝트로 이동했으므로 뒤로 가면 목록이다
+      const id = projectIdOf(page);
+      await slowSaves(page, id, 2000);
+      await page.locator('#scene-text').fill('A');
+      await new Promise((r) => setTimeout(r, 1300));
+      await page.locator('#scene-text').fill('AB');
+      await page.goBack();
+      await eventually(async () => (await serverText(id)) === 'AB', '추가 입력이 서버에 저장됨', 10000);
+      await page.close();
+    });
+
     it('다른 화면에서 장면이 바뀌면 저장이 거절되고 안내 후 새로 불러올 수 있다(지운 장면이 되살아나지 않는다)', async () => {
       const a = await env.newPage();
       await newProject(a);

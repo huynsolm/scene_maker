@@ -17,11 +17,25 @@ export function usePath(): string {
   return path;
 }
 
-export function Link({ to, children, className, style }: { to: string; children: ReactNode; className?: string; style?: React.CSSProperties }) {
+export function Link({
+  to,
+  children,
+  className,
+  style,
+  beforeNavigate,
+}: {
+  to: string;
+  children: ReactNode;
+  className?: string;
+  style?: React.CSSProperties;
+  /** 이동 전에 할 일(예: 저장). false 를 돌려주면 이동하지 않는다. 새 탭으로 여는 클릭에는 쓰이지 않는다. */
+  beforeNavigate?: () => Promise<boolean> | boolean;
+}) {
   const onClick = (e: MouseEvent) => {
     if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
     e.preventDefault();
-    navigate(to);
+    if (!beforeNavigate) return navigate(to);
+    void Promise.resolve(beforeNavigate()).then((ok) => ok && navigate(to));
   };
   return (
     <a href={to} onClick={onClick} className={className} style={style}>
