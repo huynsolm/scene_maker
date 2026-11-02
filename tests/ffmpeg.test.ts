@@ -184,6 +184,38 @@ d('실제 ffmpeg 렌더링', () => {
     for (const [t, idx] of at) expect(near(px(frame(five, t), 4, 4), colors[idx]!, 4), `${t}초 = 장면 ${idx + 1}`).toBe(true);
   }, 180_000);
 
+  it('큰 사진도 작은 이미지와 비슷한 시간에 만들어진다(프레임마다 원본을 다시 디코딩하지 않는다)', async () => {
+    const a = await makeApp(undefined, {});
+    apps.push(a.app);
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sm-bigphoto-'));
+    // 사진처럼 잡음이 있는 4096x4096 JPEG(약 7~9MB). 원본을 `-loop 1` 로 그대로 읽으면 프레임마다 디코딩해 5초(150프레임)에 약 35초가 걸린다.
+    const bigPath = path.join(dir, 'big.jpg');
+    execFileSync('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc2=s=4096x4096:d=1', '-vf', 'noise=alls=18:allf=t', '-frames:v', '1', '-q:v', '3', bigPath]);
+    const big = fs.readFileSync(bigPath);
+    expect(big.length).toBeGreaterThan(3 * 1024 * 1024);
+    expect(big.length).toBeLessThanOrEqual(10 * 1024 * 1024);
+
+    const timeOne = async (title: string, image: Buffer, name: string, type: string) => {
+      const p = a.store.createProject({ title });
+      for (const sc of a.store.getProject(p.id).scenes.slice(1)) a.store.deleteScene(p.id, sc.id);
+      const cur = a.store.getProject(p.id);
+      a.store.saveProject(p.id, { title, scenes: [{ id: cur.scenes[0]!.id, text: '시간 측정', durationSec: 5 }] });
+      expect((await upload(a.app, p.id, 0, image, name, type)).statusCode).toBe(200);
+      const t0 = Date.now();
+      const j = (await a.app.inject({ method: 'POST', url: `/api/projects/${p.id}/renders` })).json().job;
+      await waitFor(async () => {
+        const v = (await a.app.inject({ url: `/api/renders/${j.id}` })).json().job;
+        if (v.status === 'failed') throw new Error(JSON.stringify(v.error));
+        return v.status === 'done' ? v : null;
+      }, '렌더 완료', 120_000);
+      return Date.now() - t0;
+    };
+    const small = await timeOne('작은 이미지', solidPng(1280, 720, [60, 90, 150]), 'small.png', 'image/png');
+    const large = await timeOne('큰 사진', big, 'big.jpg', 'image/jpeg');
+    // 이전 방식은 약 25~30배, 사전 줄이기 이후에는 2~4배다. 느린 환경에서도 흔들리지 않게 넉넉한 비율로 본다.
+    expect(large / small, `작은 이미지 ${small}ms, 큰 사진 ${large}ms`).toBeLessThan(10);
+  }, 240_000);
+
   it('EXIF 회전 JPEG 는 사진 앱에서 보이는 방향으로, 투명 PNG 는 프레임 배경색 위에 합성되어 나온다(미리보기와 같은 모양)', async () => {
     const a = await makeApp(undefined, {});
     apps.push(a.app);

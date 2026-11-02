@@ -14,7 +14,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
-    "compare:frame": "tsx scripts/compare-frame.ts"
+    "compare:frame": "tsx scripts/compare-frame.ts",
+    "measure:render": "tsx scripts/measure-render.ts"
   },
   "engines": {
     "node": ">=22.23.4 <23"
