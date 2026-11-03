@@ -5,6 +5,7 @@ import { CenterMessage, StatusBadge } from '../components';
 import { formatUpdated, mmss } from '../format';
 import { Link } from '../router';
 import { useToast } from '../useToast';
+import { PastVideos } from './PastVideos';
 
 const STEPS = ['요청 접수', '대기열에서 순서 기다리기', '장면 화면 만들기', 'MP4 파일로 저장'];
 const POLL_MS = 1500;
@@ -22,7 +23,11 @@ export function ResultScreen({ projectId, jobId }: Props) {
   const [missing, setMissing] = useState(false); // 없는 작업이거나 이 프로젝트의 작업이 아님
   const [retrying, setRetrying] = useState(false);
   const retryingRef = useRef(false);
+  const [projectVersion, setProjectVersion] = useState(0); // 영상을 지운 뒤 lastVideo 를 다시 읽기 위해 올린다
   const toast = useToast();
+
+  // 보는 대상(프로젝트·작업)이 바뀌면 App 이 key 로 이 화면을 새로 만든다. 그래서 이전 대상의 조회·폴링 응답이 늦게 도착해도
+  // 이미 사라진 화면의 상태에만 반영되어 지금 화면을 덮어쓰지 못한다.
 
   const load = useCallback(async () => {
     try {
@@ -59,7 +64,7 @@ export function ResultScreen({ projectId, jobId }: Props) {
     return () => {
       alive = false;
     };
-  }, [projectId, job?.status, job?.id]);
+  }, [projectId, job?.status, job?.id, projectVersion]);
 
   const retry = async () => {
     if (retryingRef.current) return; // 같은 틱의 연속 클릭도 막는다(서버도 진행 중이면 409)
@@ -156,6 +161,12 @@ export function ResultScreen({ projectId, jobId }: Props) {
               </div>
               <span className="help">요청했을 때의 내용이에요. 그 뒤에 편집 화면에서 고친 내용은 들어 있지 않아요.</span>
             </section>
+            <PastVideos
+              projectId={projectId}
+              viewedJobId={job.id}
+              refreshKey={`${job.id}:${job.status}`}
+              onChanged={() => setProjectVersion((v) => v + 1)}
+            />
           </div>
 
           <aside className="panel" aria-live="polite">

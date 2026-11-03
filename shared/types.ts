@@ -44,6 +44,25 @@ export interface ApiError {
   error: { code: string; message: string };
 }
 
+/** 지난 영상 목록의 항목(완성된 영상만). */
+export interface RenderListItem {
+  id: string;
+  createdAt: string;
+  finishedAt: string;
+  totalSec: number;
+  sceneCount: number;
+  /** 요청한 뒤에 프로젝트 내용이 고쳐졌으면 true — 현재 편집 내용보다 이전 버전이다. */
+  outdated: boolean;
+  videoUrl: string;
+  downloadUrl: string;
+}
+export interface RenderList {
+  items: RenderListItem[];
+  hasMore: boolean;
+  /** 이 프로젝트의 완성된 영상 전체 개수 */
+  total: number;
+}
+
 export type JobStatus = 'waiting' | 'generating' | 'done' | 'failed';
 
 export interface RenderJobView {
