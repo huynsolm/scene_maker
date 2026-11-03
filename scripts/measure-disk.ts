@@ -7,6 +7,8 @@
  *  - 업로드 직후: 원본 이미지가 얼마나 차지하는가
  *  - 영상 한 편을 만드는 동안: 임시 작업 폴더의 최대 크기(샘플링)와 끝난 뒤 남는 것
  *  - 이미지 몇 장을 바꿔 다시 만들기를 반복할 때: 한 번마다 얼마씩 늘어나는가(이전 영상과, 이전 작업이 참조하는 이전 이미지는 남는다)
+ *  - 지난 영상을 삭제한 뒤: 최신 영상만 남기고 모두 지우고, 마지막 영상까지 지웠을 때 디스크에 남은 파일이 "필요한 파일"과 정확히 같은지 검증한다
+ *    (필요한 이미지 = 현재 장면이 쓰는 이미지 ∪ 남은 작업이 참조하는 이미지, 필요한 영상 = 남은 작업의 영상). 다르면 스크립트가 실패한다.
  *  - 프로젝트를 지운 뒤: 전부 회수되는가
  * 숫자는 이 컴퓨터의 파일 시스템 기준(`du`, 블록 단위)이다.
  */
@@ -68,6 +70,17 @@ function countFiles(dir: string): number {
   let n = 0;
   for (const e of fs.readdirSync(dir, { withFileTypes: true })) n += e.isDirectory() ? countFiles(path.join(dir, e.name)) : 1;
   return n;
+}
+
+function listFiles(dir: string): string[] {
+  if (!fs.existsSync(dir)) return [];
+  const out: string[] = [];
+  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, e.name);
+    if (e.isDirectory()) out.push(...listFiles(full));
+    else out.push(full);
+  }
+  return out.sort();
 }
 const mb = (b: number) => (b / 1024 / 1024).toFixed(b < 10 * 1024 * 1024 ? 1 : 0);
 
@@ -131,6 +144,43 @@ async function runPlan(p: Plan, imageDir: string): Promise<Snap[]> {
       snap(`(${c}회차) 이미지 ${p.replaced}장 바꾼 직후`, '이전 이미지는 이전 영상 작업이 참조하므로 남는다');
       await render(`(${c}회차) 영상 한 편 더 만든 뒤`);
     }
+
+    // 필요한 파일 = 현재 장면이 쓰는 이미지 ∪ 남은 작업이 참조하는 이미지 / 남은 작업의 영상. 디스크의 실제 파일과 정확히 같아야 한다.
+    const db = (store as unknown as { db: import('better-sqlite3').Database }).db;
+    const verify = () => {
+      const imgRows = db
+        .prepare(
+          `SELECT DISTINCT i.project_id, i.stored_name FROM images i
+           WHERE i.id IN (SELECT image_id FROM scenes WHERE project_id = ? AND image_id IS NOT NULL)
+              OR i.id IN (SELECT image_id FROM render_job_images WHERE job_id IN (SELECT id FROM render_jobs WHERE project_id = ?))`,
+        )
+        .all(proj.id, proj.id) as Array<{ project_id: string; stored_name: string }>;
+      const wantImages = imgRows.map((r) => store.imagePath(r.project_id, r.stored_name)).sort();
+      const wantVideos = (db.prepare(`SELECT id FROM render_jobs WHERE project_id = ? AND status = 'done'`).all(proj.id) as Array<{ id: string }>)
+        .map((r) => path.join(store.videosDir, proj.id, `${r.id}.mp4`))
+        .sort();
+      const haveImages = listFiles(store.uploadsDir);
+      const haveVideos = listFiles(store.videosDir);
+      const same = (a: string[], b: string[]) => a.length === b.length && a.every((x, i) => x === b[i]);
+      if (!same(wantImages, haveImages) || !same(wantVideos, haveVideos)) {
+        throw new Error(
+          `디스크의 파일이 필요한 파일과 다르다 — 이미지 필요 ${wantImages.length}/실제 ${haveImages.length}, 영상 필요 ${wantVideos.length}/실제 ${haveVideos.length}`,
+        );
+      }
+      return `필요한 파일과 일치(이미지 ${haveImages.length}장, 영상 ${haveVideos.length}편)`;
+    };
+    const doneIds = async () =>
+      ((await app.inject({ url: `/api/projects/${proj.id}/renders?limit=50` })).json().list.items as Array<{ id: string }>).map((i) => i.id);
+    const remove = async (id: string) => {
+      const res = await app.inject({ method: 'DELETE', url: `/api/projects/${proj.id}/renders/${id}` });
+      if (res.statusCode !== 200) throw new Error(`삭제 실패 ${res.statusCode} ${res.body}`);
+    };
+    snap('(삭제 전) 위 단계 그대로', verify());
+    const ids = await doneIds(); // 최신순
+    for (const id of ids.slice(1)) await remove(id);
+    snap(`오래된 완료 영상 ${ids.length - 1}편을 모두 삭제한 뒤(최신 1편만 남김)`, verify());
+    await remove(ids[0]!);
+    snap('마지막 영상까지 삭제한 뒤(장면이 쓰는 이미지만 남음)', verify());
 
     store.deleteProject(proj.id);
     snap('프로젝트 삭제 뒤');
