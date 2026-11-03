@@ -23,6 +23,7 @@ export function Link({
   className,
   style,
   beforeNavigate,
+  ariaLabel,
 }: {
   to: string;
   children: ReactNode;
@@ -30,6 +31,8 @@ export function Link({
   style?: React.CSSProperties;
   /** 이동 전에 할 일(예: 저장). false 를 돌려주면 이동하지 않는다. 새 탭으로 여는 클릭에는 쓰이지 않는다. */
   beforeNavigate?: () => Promise<boolean> | boolean;
+  /** 같은 글자의 링크가 반복될 때 스크린 리더용 이름 */
+  ariaLabel?: string;
 }) {
   const onClick = (e: MouseEvent) => {
     if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
@@ -38,7 +41,7 @@ export function Link({
     void Promise.resolve(beforeNavigate()).then((ok) => ok && navigate(to));
   };
   return (
-    <a href={to} onClick={onClick} className={className} style={style}>
+    <a href={to} onClick={onClick} className={className} style={style} aria-label={ariaLabel}>
       {children}
     </a>
   );

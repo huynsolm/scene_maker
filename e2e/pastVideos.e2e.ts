@@ -230,6 +230,60 @@ describe('이전에 만든 영상 삭제(결과 화면)', () => {
     await page.close();
   });
 
+  it('삭제 응답을 기다리는 동안 다른 영상으로 이동했다면, 늦게 도착한 삭제 응답이 사용자를 다시 이동시키지 않는다(코덱스 검수 P2)', async () => {
+    const { project, firstJob } = await projectWithVideo('늦은 삭제 응답');
+    const C = firstJob;
+    const A = cloneJob(firstJob, { minutesAgo: 5 }); // 지금 보는 영상, 지울 영상
+    const B = cloneJob(firstJob, { minutesAgo: -1 }); // 가장 최근 — 버그가 있으면 여기로 끌려간다
+    const page = await env.newPage();
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let seen = false;
+    await page.route(deleteUrl, async (route) => {
+      if (route.request().method() !== 'DELETE') return route.continue();
+      seen = true;
+      const response = await route.fetch(); // 서버는 바로 지운다
+      await gate; // 응답은 사용자가 옮겨 간 뒤에 전달한다
+      await route.fulfill({ response }).catch(() => undefined);
+    });
+    await page.goto(`${env.base}/projects/${project.id}/result/${A}`);
+    await items(page).first().waitFor();
+    await openDeleteDialog(page, A);
+    await page.locator('[data-testid=confirm-delete-video]').click();
+    await eventually(async () => seen, '삭제 요청이 보내짐');
+    await page.locator(`[data-id="${C}"] a`).first().click(); // 응답을 기다리는 중에 C 로 이동
+    await page.waitForURL(`**/result/${C}`);
+    await page.locator('[data-screen=result][data-status=done]').waitFor();
+    release();
+    await new Promise((r) => setTimeout(r, 800));
+    expect(page.url()).toContain(`/result/${C}`); // B 로 끌려가지 않았다
+    expect(page.url()).not.toContain(B);
+    expect(videoExists(project.id, A)).toBe(false); // 삭제 자체는 처리됐다
+    await page.close();
+  });
+
+  it('보고 있지 않은 영상을 지운 뒤 초점이 문서 맨 앞으로 빠지지 않고, 반복되는 버튼은 영상을 구별하는 이름을 가진다(코덱스 검수)', async () => {
+    const { project, firstJob } = await projectWithVideo('초점과 이름');
+    const newer = cloneJob(firstJob, { minutesAgo: -1 });
+    const page = await env.newPage();
+    await page.goto(`${env.base}/projects/${project.id}/result/${newer}`);
+    await items(page).first().waitFor();
+    const labels = await page.locator('[data-testid=past-item] [aria-label]').evaluateAll((els) => els.map((e) => e.getAttribute('aria-label')!));
+    expect(labels.length).toBe(5); // 보기(지금 보는 영상은 없음)·다운로드·삭제 = 2 + 3
+    const deleteLabels = labels.filter((l) => l.endsWith('삭제'));
+    expect(new Set(deleteLabels).size).toBe(deleteLabels.length); // 이름만으로 버튼을 구별할 수 있다
+    expect(deleteLabels.every((l) => /\d+초 영상/.test(l))).toBe(true);
+
+    await page.locator(`[data-id="${firstJob}"] [data-testid=past-delete]`).focus();
+    await page.keyboard.press('Enter'); // 키보드로 연다
+    await page.locator('[role=dialog]').waitFor();
+    await page.keyboard.press('Tab'); // 취소 → 삭제
+    await page.keyboard.press('Enter');
+    await eventually(async () => (await items(page).count()) === 1, '목록에서 사라짐');
+    await eventually(async () => page.evaluate(() => document.activeElement !== document.body && !!document.activeElement?.closest('[data-testid=past-videos]')), '초점이 목록 안에 있음');
+    await page.close();
+  });
+
   it('다른 화면에서 이미 지운 영상을 지우려 하면 안내하고 목록을 새로 읽는다', async () => {
     const { project, firstJob } = await projectWithVideo('중복 삭제');
     const newer = cloneJob(firstJob, { minutesAgo: -1 });

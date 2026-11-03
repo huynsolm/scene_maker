@@ -38,6 +38,16 @@ export function PastVideos({ projectId, viewedJobId, refreshKey, onChanged }: Pr
   const pendingId = useRef<string | null>(null); // 결과를 모르는 삭제의 대상
   const viewedRef = useRef(viewedJobId);
   viewedRef.current = viewedJobId;
+  // 이 화면이 아직 떠 있는가. 대상이 바뀌어 화면이 새로 만들어지면 이전 화면에서 시작한 삭제·재확인이 늦게 끝나도,
+  // 전역 이동(navigate)이나 초점 이동으로 지금 화면을 건드리지 않아야 한다(상태 갱신은 언마운트되면 무시되지만 이동은 아니다).
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+  const headingRef = useRef<HTMLHeadingElement>(null);
   const onChangedRef = useRef(onChanged);
   onChangedRef.current = onChanged;
 
@@ -106,9 +116,13 @@ export function PastVideos({ projectId, viewedJobId, refreshKey, onChanged }: Pr
   const afterRemoved = (id: string, list: RenderList) => {
     pendingId.current = null;
     onChangedRef.current();
+    if (!mounted.current) return; // 사용자가 이미 다른 화면으로 옮겼다 — 그 화면을 덮어쓰지 않는다
     if (id === viewedRef.current) {
       const next = list.items[0];
       navigate(next ? `/projects/${projectId}/result/${next.id}` : `/projects/${projectId}`);
+    } else {
+      // 지운 항목의 버튼이 사라지므로 초점이 문서 맨 앞으로 빠지지 않게 목록 제목으로 옮긴다.
+      requestAnimationFrame(() => headingRef.current?.focus());
     }
   };
 
@@ -180,7 +194,9 @@ export function PastVideos({ projectId, viewedJobId, refreshKey, onChanged }: Pr
 
   return (
     <section className="past" data-testid="past-videos" aria-label="이전에 만든 영상">
-      <h3 style={{ fontSize: 14, fontWeight: 700 }}>이전에 만든 영상</h3>
+      <h3 ref={headingRef} tabIndex={-1} style={{ fontSize: 14, fontWeight: 700, outline: 'none' }}>
+        이전에 만든 영상
+      </h3>
       {unknown && (
         <div className="note-warn" role="alert" data-testid="delete-unknown" style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
           <span style={{ flex: '1 1 200px' }}>삭제 결과를 확인하지 못했어요. 확인되기 전에는 다른 영상도 삭제할 수 없어요.</span>
@@ -201,6 +217,7 @@ export function PastVideos({ projectId, viewedJobId, refreshKey, onChanged }: Pr
         <ul className="past-list">
           {items.map((v) => {
             const current = v.id === viewedJobId;
+            const what = `${formatUpdated(v.finishedAt)}에 만든 ${v.totalSec}초 영상`; // 같은 이름의 버튼이 반복되므로 어떤 영상인지 이름에 넣는다
             return (
               <li key={v.id} className="past-item" data-testid="past-item" data-id={v.id} data-current={current}>
                 <div className="meta">
@@ -213,14 +230,14 @@ export function PastVideos({ projectId, viewedJobId, refreshKey, onChanged }: Pr
                 </div>
                 <div className="actions">
                   {!current && (
-                    <Link to={`/projects/${projectId}/result/${v.id}`} className="btn btn-secondary">
+                    <Link to={`/projects/${projectId}/result/${v.id}`} className="btn btn-secondary" ariaLabel={`${what} 보기`}>
                       보기
                     </Link>
                   )}
-                  <a className="btn btn-secondary" href={v.downloadUrl} download>
+                  <a className="btn btn-secondary" href={v.downloadUrl} download aria-label={`${what} 다운로드`}>
                     다운로드
                   </a>
-                  <button className="btn btn-secondary" data-testid="past-delete" disabled={busy || unknown} onClick={() => setConfirmId(v.id)}>
+                  <button className="btn btn-secondary" data-testid="past-delete" aria-label={`${what} 삭제`} disabled={busy || unknown} onClick={() => setConfirmId(v.id)}>
                     삭제
                   </button>
                 </div>
