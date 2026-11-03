@@ -120,6 +120,27 @@ export function PastVideos({ projectId, viewedJobId, refreshKey, onChanged, onEm
     }
   };
 
+  /**
+   * 삭제 응답의 첫 페이지(`first`)에서 시작해, 사용자가 펼쳐 두었던 개수(`target`)만큼 커서로 이어 읽는다(요청당 최대 50).
+   * 읽는 중 하나라도 실패하면 서버의 첫 페이지만 쓴다(접히지만 틀리지는 않는다).
+   */
+  const readRange = async (first: RenderList, target: number, g: number): Promise<{ items: RenderListItem[]; hasMore: boolean }> => {
+    let items = first.items;
+    let hasMore = first.hasMore;
+    try {
+      while (items.length < target && hasMore) {
+        const page = await api.listRenders(projectId, items[items.length - 1]!.id, Math.min(50, target - items.length));
+        if (g !== gen.current) break; // 그 사이 더 새로운 읽기가 시작됐다 — 호출한 쪽이 이 결과를 버린다
+        items = [...items, ...page.items];
+        hasMore = page.hasMore;
+        if (page.items.length === 0) break;
+      }
+    } catch {
+      return { items: first.items, hasMore: first.hasMore };
+    }
+    return { items, hasMore };
+  };
+
   /** 영상이 사라진 것이 확인된 뒤의 공통 처리. 보고 있던 영상이면 남은 최신 영상(없으면 편집 화면)으로 이동한다. */
   const afterRemoved = (id: string, list: RenderList) => {
     pendingId.current = null;
@@ -147,16 +168,15 @@ export function PastVideos({ projectId, viewedJobId, refreshKey, onChanged, onEm
     try {
       const res = await api.deleteRender(projectId, id);
       gen.current++; // 이전에 보낸 목록 조회가 지금 이후에 도착해도 쓰지 않는다
-      // 이미 "더 보기"로 펼친 항목은 접지 않는다: 지운 항목만 빼고 유지하되, 그 앞부분이 서버의 첫 페이지와 같을 때만이다.
-      // 다르면(예: 그 사이 다른 화면에서 새 영상이 완성됨) 펼친 목록이 "최신순 접두"라는 가정이 깨졌으므로 서버의 첫 페이지로 다시 시작한다.
-      // 길이나 전체 개수만으로는 이를 알 수 없다 — 틀린 목록에서 이어 읽으면 새 영상에 영영 닿지 못한다.
-      const rest = (itemsRef.current ?? []).filter((i) => i.id !== id);
-      const head = res.list.items;
-      const consistent = rest.length >= head.length && head.every((h, i) => rest[i]?.id === h.id);
-      const next = consistent ? rest : head;
-      setItems(next);
-      setHasMore(next.length < res.list.total);
-      setListError(null);
+      // 이미 "더 보기"로 펼친 범위는 접지 않되, 캐시를 믿지 않고 그 개수만큼 서버에서 다시 읽는다.
+      // (지운 항목만 빼고 유지하면 다른 화면의 삭제·완성이 섞여 항목이 남거나 빠지고 "더 보기"가 꺼질 수 있다.)
+      const g = gen.current;
+      const range = await readRange(res.list, Math.max(0, (itemsRef.current?.length ?? 0) - 1), g);
+      if (g === gen.current && mounted.current) {
+        setItems(range.items);
+        setHasMore(range.hasMore);
+        setListError(null);
+      }
       toast.show('영상을 삭제했어요');
       afterRemoved(id, res.list);
     } catch (e) {
