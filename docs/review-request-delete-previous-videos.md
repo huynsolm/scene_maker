@@ -157,3 +157,36 @@ npm run build && npx vitest run --config vitest.e2e.config.ts e2e/pastVideos.e2e
 | `requestAnimationFrame` | `mounted` 검사가 예약 시점에만 적용됨 | 콜백 안에서도 `mounted`를 확인하고, 언마운트 때 예약을 취소(`cancelAnimationFrame`). 별도 E2E는 없음(현재 상위 콜백이 `null` 참조라 재현 경로가 없어, 코드 수준 방어) |
 | 수용 | 404·재확인 시 첫 페이지로 접힘, 버튼 이름의 순번 변화 | 현재 범위에서 수용 |
 교훈: §9.3의 1번(접두 가정)은 "표시 지연일 수 있다"고 가볍게 적었으나 실제로는 새 영상에 영영 닿지 못하는 결함이었다.
+
+## 11. P2 수정 재검수 요청 (커밋 `5e9717c`, 기준 `main` = `ea52468`)
+§10에서 처리한 코덱스 지적(펼친 목록에서 새 영상 누락)의 수정이 맞는지 병합 전에 한 번 더 확인해 달라는 요청이다.
+
+### 11.1 범위
+- `git diff 7c18250..5e9717c` — `web/screens/PastVideos.tsx`, `web/screens/ResultScreen.tsx`, `web/styles.css`, `e2e/pastVideos.e2e.ts`, 문서. 서버는 바꾸지 않았다.
+- 후속 변경 전체(PR 예정): `git diff ea52468..5e9717c`.
+
+### 11.2 변경 요약
+| 항목 | 변경 |
+|---|---|
+| 새 영상 누락 | 삭제 응답의 서버 첫 페이지(`head`)와 펼친 목록에서 지운 항목을 뺀 `rest`를 비교한다. `rest.length >= head.length`이고 `head`의 모든 id가 `rest`의 같은 위치 id와 같을 때만 `rest`를 유지하고(`consistent`), 아니면 `head`로 다시 시작한다. 유지할 때 `hasMore = next.length < res.list.total` |
+| 초점 표시 | 제목 두 곳(`PastVideos`의 "이전에 만든 영상", `ResultScreen`의 "구성 장면")에 `className="focus-target"`. `.focus-target:focus { outline: none }` + `.focus-target:focus-visible { outline: 2px solid var(--primary); outline-offset: 3px }` |
+| `requestAnimationFrame` | 콜백 안에서 `mounted` 확인, 언마운트 시 `cancelAnimationFrame` |
+
+### 11.3 검증 상태
+- CI #66 성공(타입 검사, 단위·API 159개, 빌드, E2E 75개). 로컬도 같음.
+- 신규 E2E: 15편 펼침 → 다른 곳에서 새 영상 완성(DB에 최신 영상 삽입) → 하나 삭제 → 새 영상이 맨 위, "더 보기"로 서버의 15편 전부 도달(겹침·누락 없음). 초점 E2E에는 윤곽선이 `none`이 아님을 확인하는 단언 추가.
+- 변이 검사: 일치 확인을 길이 비교만으로 되돌리면 신규 E2E 실패, `focus-visible` 윤곽선을 제거하면 초점 E2E 실패. `requestAnimationFrame` 쪽은 재현 경로가 없어 E2E 없음(코드 수준 방어).
+
+### 11.4 특히 봐 주었으면 하는 부분 (스스로 의심하는 곳)
+1. **첫 페이지까지만 검증하는 한계**: 일치 확인은 서버 첫 페이지(최대 10개) 범위만 본다. 새 영상은 항상 최신이라 이 범위에서 걸리지만, **다른 탭이 펼친 범위 안쪽(11번째 이후)의 영상을 지운 경우**에는 `rest`에 이미 없는 항목이 남는다. 이때 `hasMore = next.length < total`이 틀릴 수 있다 — 예: 14편을 펼쳐 둔 상태에서 다른 탭이 그중 1편을 지우고 이 탭이 다른 1편을 지우면, 실제 총 12편 중 12편이 아니라 stale 항목 1개를 포함한 12개가 보여 "더 보기"가 사라질 수 있다(보이지 않는 영상이 없는데도 stale 항목만 남거나, 반대로 실제로 안 보이는 영상이 있는데 `hasMore=false`가 되는 경우가 있는지 따져 봐 달라). 펼친 범위(최대 50)를 한 번에 다시 읽어 전체를 대조하는 편이 안전한가, 아니면 stale 항목은 클릭 시 404로 정리되므로 수용 가능한가?
+2. **`consistent`의 조건**: `rest.length >= head.length`이고 접두 일치. `rest`가 `head`보다 짧고 접두가 같은 경우(첫 페이지보다 적게 펼친 상태에서 삭제)에는 `head`를 쓰는 것이 의도다. 엣지(빈 `rest`, `head`가 빈 경우, `total`이 0)에서 의도대로 동작하는가?
+3. **`:focus-visible` 미지원 브라우저**: `.focus-target:focus { outline: none }`이 먼저 적용되므로 `:focus-visible`을 지원하지 않는 오래된 브라우저에서는 윤곽선이 전혀 없다. 현재 대상 브라우저 기준으로 수용 가능한가? 마우스 클릭 뒤 프로그램으로 옮긴 초점에는 윤곽선이 그려지지 않는 것은 의도다.
+4. **`requestAnimationFrame` 정리**: 콜백 안의 `mounted` 확인과 `cancelAnimationFrame`이 서로 중복인데, 놓친 경로가 있는지.
+5. 접근성 이름의 "최신순 N번째"가 목록 변경에 따라 바뀌는 점은 이전 검수에서 수용 가능으로 판단받았다 — 재확인 불필요.
+
+### 11.5 재현
+```
+npm ci && npm run typecheck && npm test
+npm run build && npm run test:e2e
+npm run build && npx vitest run --config vitest.e2e.config.ts e2e/pastVideos.e2e.ts -t "후속|코덱스"
+```
