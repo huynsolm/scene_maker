@@ -14,13 +14,15 @@ interface Props {
   refreshKey: string;
   /** 영상을 지운 뒤 호출 — 상위가 "마지막 생성 영상" 같은 파생 정보를 다시 읽는다 */
   onChanged: () => void;
+  /** 마지막 영상을 지워 목록이 사라질 때 초점을 받을 곳을 상위가 정한다(이 컴포넌트는 빈 목록을 그리지 않으므로 제목도 없다) */
+  onEmptied?: () => void;
 }
 
 /**
  * 이 프로젝트의 지난 완성 영상 목록과 개별 삭제.
  * 목록 응답마다 세대 번호를 확인해, 삭제 전에 보낸 조회가 늦게 도착해도 지워진 항목이 되살아나지 않게 한다.
  */
-export function PastVideos({ projectId, viewedJobId, refreshKey, onChanged }: Props) {
+export function PastVideos({ projectId, viewedJobId, refreshKey, onChanged, onEmptied }: Props) {
   const toast = useToast();
   const [items, setItems] = useState<RenderListItem[] | null>(null);
   const [hasMore, setHasMore] = useState(false);
@@ -50,6 +52,10 @@ export function PastVideos({ projectId, viewedJobId, refreshKey, onChanged }: Pr
   const headingRef = useRef<HTMLHeadingElement>(null);
   const onChangedRef = useRef(onChanged);
   onChangedRef.current = onChanged;
+  const onEmptiedRef = useRef(onEmptied);
+  onEmptiedRef.current = onEmptied;
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
 
   const apply = useCallback((list: RenderList) => {
     setItems(list.items);
@@ -122,7 +128,8 @@ export function PastVideos({ projectId, viewedJobId, refreshKey, onChanged }: Pr
       navigate(next ? `/projects/${projectId}/result/${next.id}` : `/projects/${projectId}`);
     } else {
       // 지운 항목의 버튼이 사라지므로 초점이 문서 맨 앞으로 빠지지 않게 목록 제목으로 옮긴다.
-      requestAnimationFrame(() => headingRef.current?.focus());
+      // 목록이 아예 비면 제목도 사라지므로 상위가 정한 곳으로 옮긴다.
+      requestAnimationFrame(() => (list.total === 0 ? onEmptiedRef.current?.() : headingRef.current?.focus()));
     }
   };
 
@@ -134,7 +141,13 @@ export function PastVideos({ projectId, viewedJobId, refreshKey, onChanged }: Pr
     try {
       const res = await api.deleteRender(projectId, id);
       gen.current++; // 이전에 보낸 목록 조회가 지금 이후에 도착해도 쓰지 않는다
-      apply(res.list);
+      // 이미 "더 보기"로 펼친 항목은 접지 않는다: 지운 항목만 빼고, 서버가 알려 준 전체 개수로 더 있는지 정한다.
+      // (펼친 목록이 첫 페이지보다 짧아졌다면 서버의 첫 페이지가 더 최신이므로 그것을 쓴다.)
+      const rest = (itemsRef.current ?? []).filter((i) => i.id !== id);
+      const next = rest.length >= res.list.items.length ? rest : res.list.items;
+      setItems(next);
+      setHasMore(next.length < res.list.total);
+      setListError(null);
       toast.show('영상을 삭제했어요');
       afterRemoved(id, res.list);
     } catch (e) {
@@ -215,9 +228,10 @@ export function PastVideos({ projectId, viewedJobId, refreshKey, onChanged }: Pr
       )}
       {items && items.length > 0 && (
         <ul className="past-list">
-          {items.map((v) => {
+          {items.map((v, idx) => {
             const current = v.id === viewedJobId;
-            const what = `${formatUpdated(v.finishedAt)}에 만든 ${v.totalSec}초 영상`; // 같은 이름의 버튼이 반복되므로 어떤 영상인지 이름에 넣는다
+            // 같은 이름의 버튼이 반복되므로 어떤 영상인지 이름에 넣는다. 같은 분에 만든 같은 길이의 영상도 구별되도록 최신순 번호를 붙인다.
+            const what = `최신순 ${idx + 1}번째, ${formatUpdated(v.finishedAt)}에 만든 ${v.totalSec}초 영상`;
             return (
               <li key={v.id} className="past-item" data-testid="past-item" data-id={v.id} data-current={current}>
                 <div className="meta">

@@ -284,6 +284,82 @@ describe('이전에 만든 영상 삭제(결과 화면)', () => {
     await page.close();
   });
 
+  it('후속: 이미 "더 보기"로 펼친 목록은 영상을 지워도 접히지 않고, 남은 영상이 더 있으면 "더 보기"가 남는다', async () => {
+    const { project, firstJob } = await projectWithVideo('펼친 목록 유지');
+    const all = [firstJob];
+    for (let i = 1; i <= 14; i++) all.push(cloneJob(firstJob, { minutesAgo: 2000 - i * 10 })); // 15편
+    db().prepare(`UPDATE render_jobs SET created_at = ?, finished_at = ? WHERE id = ?`).run(new Date(Date.now() - 3000 * 60_000).toISOString(), new Date(Date.now() - 3000 * 60_000).toISOString(), firstJob);
+    const newest = all[14]!;
+    const page = await env.newPage();
+    await page.goto(`${env.base}/projects/${project.id}/result/${newest}`);
+    await items(page).first().waitFor();
+    expect(await items(page).count()).toBe(10);
+    await page.locator('[data-testid=past-more]').click();
+    await eventually(async () => (await items(page).count()) === 15, '더 보기 후 15편');
+    expect(await page.locator('[data-testid=past-more]').count()).toBe(0);
+
+    // 펼친 목록 안(두 번째 페이지)의 영상을 지운다 — 접히지 않아야 한다
+    const victim = all[2]!;
+    await openDeleteDialog(page, victim);
+    await page.locator('[data-testid=confirm-delete-video]').click();
+    await eventually(async () => (await page.locator(`[data-id="${victim}"]`).count()) === 0, '지운 영상이 사라짐');
+    expect(await items(page).count()).toBe(14); // 15 - 1, 첫 페이지(10개)로 접히지 않았다
+    expect(await page.locator('[data-testid=past-more]').count()).toBe(0);
+    expect(new Set(await ids(page)).size).toBe(14);
+    await page.close();
+  });
+
+  it('후속: 첫 페이지에서 지우면 첫 페이지가 다시 채워지고 "더 보기"가 남으며, 누르면 빠짐없이 이어진다', async () => {
+    const { project, firstJob } = await projectWithVideo('첫 페이지 삭제');
+    const all = [firstJob];
+    for (let i = 1; i <= 14; i++) all.push(cloneJob(firstJob, { minutesAgo: 2000 - i * 10 })); // 15편
+    db().prepare(`UPDATE render_jobs SET created_at = ?, finished_at = ? WHERE id = ?`).run(new Date(Date.now() - 3000 * 60_000).toISOString(), new Date(Date.now() - 3000 * 60_000).toISOString(), firstJob);
+    const newest = all[14]!;
+    const page = await env.newPage();
+    await page.goto(`${env.base}/projects/${project.id}/result/${newest}`);
+    await items(page).first().waitFor();
+    const victim = all[13]!; // 최신순 두 번째
+    await openDeleteDialog(page, victim);
+    await page.locator('[data-testid=confirm-delete-video]').click();
+    await eventually(async () => (await page.locator(`[data-id="${victim}"]`).count()) === 0, '지운 영상이 사라짐');
+    expect(await items(page).count()).toBe(10); // 첫 페이지가 서버의 새 첫 페이지(10개)로 다시 채워진다
+    expect(await page.locator('[data-testid=past-more]').count()).toBe(1); // 14편 중 10편만 보이므로 더 있다
+    await page.locator('[data-testid=past-more]').click();
+    await eventually(async () => (await items(page).count()) === 14, '이어서 14편');
+    expect(new Set(await ids(page)).size).toBe(14); // 겹치거나 빠지지 않는다
+    expect(await page.locator('[data-testid=past-more]').count()).toBe(0);
+    await page.close();
+  });
+
+  it('후속: 이전 영상 목록이 비면 초점이 문서 맨 앞으로 빠지지 않고 "구성 장면" 제목으로 간다', async () => {
+    const { project, firstJob } = await projectWithVideo('빈 목록 초점');
+    const B = cloneJob(firstJob, { status: 'generating', minutesAgo: -1 });
+    const page = await env.newPage();
+    await page.goto(`${env.base}/projects/${project.id}/result/${B}`); // 진행 중 B를 보고 있어 목록에는 A만 있다
+    await page.locator('[data-screen=result][data-status=generating]').waitFor();
+    await items(page).first().waitFor();
+    await openDeleteDialog(page, firstJob);
+    await page.locator('[data-testid=confirm-delete-video]').click();
+    await eventually(async () => (await items(page).count()) === 0, '목록이 비어 사라짐');
+    await eventually(async () => page.evaluate(() => document.activeElement?.tagName === 'H3' && !!document.activeElement.textContent?.includes('구성 장면')), '초점이 구성 장면 제목에 있음');
+    await page.close();
+  });
+
+  it('후속: 같은 분에 만든 같은 길이의 영상도 버튼 이름이 서로 다르다', async () => {
+    const { project, firstJob } = await projectWithVideo('같은 분 같은 길이');
+    const a = cloneJob(firstJob, { minutesAgo: 1 });
+    const b = cloneJob(firstJob, { minutesAgo: 1 }); // 시각·길이가 같다
+    db().prepare(`UPDATE render_jobs SET created_at = (SELECT created_at FROM render_jobs WHERE id = ?), finished_at = (SELECT finished_at FROM render_jobs WHERE id = ?) WHERE id = ?`).run(a, a, b);
+    const page = await env.newPage();
+    await page.goto(`${env.base}/projects/${project.id}/result/${firstJob}`);
+    await items(page).first().waitFor();
+    const labels = await page.locator('[data-testid=past-delete]').evaluateAll((els) => els.map((e) => e.getAttribute('aria-label')!));
+    expect(labels.length).toBe(3);
+    expect(new Set(labels).size).toBe(3); // 같은 시각·길이여도 최신순 번호로 구별된다
+    expect(labels.every((l) => l.endsWith('삭제'))).toBe(true); // 눈에 보이는 글자("삭제")를 이름에 포함
+    await page.close();
+  });
+
   it('다른 화면에서 이미 지운 영상을 지우려 하면 안내하고 목록을 새로 읽는다', async () => {
     const { project, firstJob } = await projectWithVideo('중복 삭제');
     const newer = cloneJob(firstJob, { minutesAgo: -1 });
