@@ -1,0 +1,72 @@
+# 코덱스 검수 요청: 이전 영상 개별 삭제 (1·2단계)
+
+검수 대상: 브랜치 `claude/great-mayer-hvh0o2`, 커밋 `c3bc8b9`(서버) · `0665ee8`(문서) · `084e350`(UI). 기준(계획): `docs/plan-delete-previous-videos.md`(커밋 `13f7441`, 이전 검수 반영 완료).
+비교 범위: `git diff 13f7441..084e350` (14개 파일, +1162/−21).
+상태: 1단계(서버)·2단계(결과 화면 UI) 구현·CI 통과(#55, #56). **3단계(디스크 실측 `measure:disk`)는 아직 하지 않았다.**
+
+## 1. 무엇을 만들었나
+결과 화면에서 **완성된 지난 영상을 하나씩 삭제**한다(실패 기록 삭제·일괄 삭제·자동 삭제는 범위 밖). 삭제는 영상 파일, 작업 기록, **이 영상에만 쓰이던 이전 업로드 이미지**를 함께 지운다. 현재 장면이 쓰거나 다른 작업(진행 중·실패 포함)이 참조하는 이미지는 남긴다.
+
+### 서버 (`c3bc8b9`)
+| 파일 | 내용 |
+|---|---|
+| `server/renderStore.ts` | `listDone`(커서 목록), `deleteVideo`, `recomputeProjectStatus`, `sweepFiles`(실패 허용) |
+| `server/store.ts` | `collectImageIfUnused`·`sweepOrphans`를 파일 삭제 실패에도 계속 진행하게 변경 |
+| `server/fsSafe.ts` (신규) | `safeRm`(실패 시 경고 로그 후 `false`), `rmdirIfEmpty` |
+| `server/app.ts` | `GET /api/projects/:id/renders?limit&before`, `DELETE /api/projects/:id/renders/:jobId` |
+| `server/errors.ts`, `shared/types.ts` | `RENDER_NOT_DELETABLE`, `RenderList`/`RenderListItem` |
+
+핵심 규칙
+- 삭제 순서: **한 트랜잭션**(연결 이미지 id 읽기 → 작업 행 삭제(연결은 CASCADE) → 프로젝트 상태 재계산) → 커밋 뒤 영상 파일 삭제 → 이미지마다 `collectImageIfUnused`. 파일 삭제 실패는 요청을 실패시키지 않고(로그만), 다음 서버 시작의 `sweepFiles`/`sweepOrphans`가 회수한다.
+- `projects.updated_at`은 바꾸지 않는다(바꾸면 남은 영상이 전부 "현재 내용보다 이전"으로 표시됨).
+- 목록 정렬 `finished_at DESC, rowid DESC`(= `lastVideo`와 같은 기준), 커서는 `(finished_at, rowid) < (?, ?)`. 기준 영상이 지워졌으면 404.
+- 프로젝트 상태 재계산: 활성 작업이 있으면 건드리지 않음. 아니면 **생성 순서상 최신 작업(`created_at DESC, rowid DESC`, 상태 무관)** 의 결과, 단 그 뒤에 내용이 고쳐졌으면 `editing`, 남은 작업이 없으면 `editing`. (완료 A → 실패 B → 완료 C에서 C를 지우면 표시 대체 영상은 A, 프로젝트 상태는 B 기준 `failed`.)
+- 다른 프로젝트의 작업 id는 404, 진행 중·실패 작업은 409(`RENDER_NOT_DELETABLE`).
+
+### 화면 (`084e350`)
+| 파일 | 내용 |
+|---|---|
+| `web/screens/PastVideos.tsx` (신규) | 목록(처음 10개+"더 보기"), 삭제 확인 `Modal`, 삭제/재확인 로직 |
+| `web/screens/ResultScreen.tsx` | `PastVideos` 배치, 삭제 후 `lastVideo` 재조회(`projectVersion`) |
+| `web/api.ts`, `web/styles.css` | `listRenders`/`deleteRender`, 스타일 |
+
+핵심 규칙
+- 목록 세대 번호(`gen`): 삭제 성공 시 올려서, 삭제 전에 보낸 목록 응답이 늦게 도착해도 버린다.
+- 보고 있던 영상을 지우면 남은 최신 영상으로, 없으면 편집 화면으로 이동. 진행 중 B를 보며 A를 지워도 B의 화면·폴링은 유지.
+- 삭제 요청이 **시간 초과 / 연결 끊김(`status 0`)** 이면 "결과 불명": 모든 삭제 버튼을 막고 `[다시 확인]`. **목록 재조회가 성공해야** 진행하고, `getRender(id)`가 404면 삭제됨, 200이면 삭제되지 않음으로 확정. 재조회 실패 시 불명확 유지.
+- 404(이미 삭제됨)·409는 안내 후 목록 재조회.
+- 계획과 달라진 점: 계획의 `ResultScreen` 세대 번호는 넣지 않았다. `App.tsx`가 `key`로 대상마다 화면을 새로 만들어 늦은 응답이 사라진 화면에만 반영되기 때문(`key`를 빼면 실패하는 E2E로 지킴).
+
+## 2. 검증 결과
+- 로컬: `tsc` 통과, 단위·API 159개(신규 18개 `tests/deleteVideo.test.ts`), 브라우저 E2E 68개(신규 9개 `e2e/pastVideos.e2e.ts`). CI #55(서버)·#56(UI) 성공.
+- 변이 검사(빌드 성공을 확인한 뒤 실행, 모두 해당 테스트가 실패함을 확인):
+  - 서버: 이미지 회수 호출 제거 / 프로젝트 상태 재계산 제거 / `safeRm` 오류 던지기 / 목록 `rowid` 동률 정렬 제거 / 활성·실패 거절 제거
+  - 화면: 삭제 성공 시 `gen` 증가 제거 / 삭제 후 이동 제거 / 불명확 중 삭제 버튼 잠금 제거 / `status 0`을 불명확으로 보는 처리 제거 / 재조회 실패에도 삭제 확정 / 목록 응답 세대 검사 제거 / `App`의 `key` 제거
+- 테스트 한계: E2E의 "영상이 여러 편 있는 상태"는 완성 작업 행과 영상 파일을 **복제**해서 만들었다(실제 렌더는 프로젝트당 1편). 진행 중 B는 `generating` 행을 직접 삽입한 것이라 큐가 처리하지 않는다. 파일 삭제 실패는 `vi.spyOn(fs, 'rmSync')`로 주입했다(실제 잠금은 아님).
+
+## 3. 특히 봐 주었으면 하는 부분 (스스로 의심하는 곳)
+1. **동시성 가정**: `deleteVideo`의 트랜잭션 → 파일 삭제 → 이미지 회수 구간이 동기 실행이라 요청 사이에 끼어들 수 없다는 가정(단일 프로세스, better-sqlite3 동기). 이 가정이 깨지는 경로(예: 렌더 큐가 같은 이미지를 참조하는 새 작업을 만드는 시점과의 순서)가 있는가?
+2. **이미지 회수의 정확성**: `collectImageIfUnused`가 "현재 장면 ∪ 남은 모든 작업(활성·실패 포함)이 참조하지 않을 때만" 지우는지, 삭제 직전에 읽은 `imageIds` 이후 새로 참조가 생기는 경우가 없는지.
+3. **프로젝트 상태 재계산**이 `finish()`/`createJob()`의 기존 규칙과 모순되지 않는지(특히 `updated_at > created_at` 비교는 문자열 비교이며 같은 시각 동률의 처리).
+4. **파일 삭제 실패 정책**: Windows 등에서 `EBUSY/EPERM`일 때 DB는 이미 지워졌으므로 파일은 고아가 된다. 시작 시 정리까지는 남아 있고, 서버를 오래 켜 두면 계속 남는다. 재시도 시점이 시작 시뿐인 것으로 충분한가?
+5. **"결과 불명" 처리 범위**: `status 0`(시간 초과뿐 아니라 연결 실패)을 모두 불명확으로 본다. 요청이 서버에 닿지 않은 경우에도 재확인(`getRender`)으로 풀리므로 안전하다고 판단했지만, 놓친 경로가 있는가? `remove`가 404 뒤 목록 재조회에 실패했을 때도 불명확로 보내는 것이 맞는가?
+6. **목록 상태**: 삭제 성공 응답은 첫 페이지로 목록을 **덮어쓴다**(이미 "더 보기"로 펼친 항목은 접힌다). 의도적 단순화인데 사용성/정합성 관점에서 문제인가? "더 보기" 중 삭제·삭제 중 "더 보기"의 경쟁은 `gen`과 `moreRef`로 막는다고 보았다.
+7. **접근성**: 항목마다 같은 "삭제"/"보기"/"다운로드" 라벨 버튼이 반복된다. 스크린 리더에서 항목을 구분할 `aria-label`이 없다(미적용). 확인 창은 기존 `Modal`(초점 순환·복귀, 기본 초점 취소)을 재사용. 삭제 후 초점이 사라진 버튼 대신 어디로 가는지는 확인하지 않았다.
+8. **토스트가 두 곳**(`ResultScreen`·`PastVideos`에 각각 `useToast`)에서 동시에 뜰 수 있다.
+9. 다른 탭에서 지워진 영상을 **이미 열어 둔 결과 화면**은(완료 상태는 폴링하지 않아) 재생이 실패할 때까지 알 수 없다. 계획에는 없었으나 허용 가능한가?
+10. 목록 쿼리의 `before` 검증(`/^[0-9a-f-]{36}$/`)과 `limit` 범위(1–50)가 충분한가.
+
+## 4. 재현 방법
+```
+npm ci
+npm run typecheck && npm test                 # 단위·API 159개
+npm run build && npm run test:e2e             # E2E 68개 (먼저 build 필요)
+npx vitest run tests/deleteVideo.test.ts      # 서버 신규 18개
+npm run build && npx vitest run --config vitest.e2e.config.ts e2e/pastVideos.e2e.ts   # UI 신규 9개
+```
+변이 검사는 대상 줄을 바꾸고 `npm run build`(화면) 성공을 확인한 뒤 위 테스트를 돌리면 재현된다.
+
+## 5. 범위 밖 / 미완료
+- 3단계: `npm run measure:disk`에 "오래된 완료 영상을 모두 삭제한 뒤" 단계를 더하고, 남은 파일이 필요한 파일과 정확히 일치하는지 확인(미구현).
+- 실패한 작업 기록이 붙잡는 이미지의 회수, 일괄·자동 삭제.
+- 측정/브라우저 검증 한계: 실제 OS 잠금, Firefox/Safari, 터치, 스크린 리더는 확인하지 않았다.
