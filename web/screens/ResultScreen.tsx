@@ -144,7 +144,7 @@ export function ResultScreen({ projectId, jobId }: Props) {
               )}
             </div>
             <section style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              <h3 ref={sceneHeadingRef} tabIndex={-1} style={{ fontSize: 14, fontWeight: 700, outline: 'none' }}>
+              <h3 ref={sceneHeadingRef} tabIndex={-1} className="focus-target" style={{ fontSize: 14, fontWeight: 700 }}>
                 구성 장면
               </h3>
               <div className="scene-summary">

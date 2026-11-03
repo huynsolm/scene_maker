@@ -43,10 +43,12 @@ export function PastVideos({ projectId, viewedJobId, refreshKey, onChanged, onEm
   // 이 화면이 아직 떠 있는가. 대상이 바뀌어 화면이 새로 만들어지면 이전 화면에서 시작한 삭제·재확인이 늦게 끝나도,
   // 전역 이동(navigate)이나 초점 이동으로 지금 화면을 건드리지 않아야 한다(상태 갱신은 언마운트되면 무시되지만 이동은 아니다).
   const mounted = useRef(true);
+  const rafId = useRef(0);
   useEffect(() => {
     mounted.current = true;
     return () => {
       mounted.current = false;
+      cancelAnimationFrame(rafId.current); // 예약해 둔 초점 이동도 취소한다
     };
   }, []);
   const headingRef = useRef<HTMLHeadingElement>(null);
@@ -129,7 +131,11 @@ export function PastVideos({ projectId, viewedJobId, refreshKey, onChanged, onEm
     } else {
       // 지운 항목의 버튼이 사라지므로 초점이 문서 맨 앞으로 빠지지 않게 목록 제목으로 옮긴다.
       // 목록이 아예 비면 제목도 사라지므로 상위가 정한 곳으로 옮긴다.
-      requestAnimationFrame(() => (list.total === 0 ? onEmptiedRef.current?.() : headingRef.current?.focus()));
+      rafId.current = requestAnimationFrame(() => {
+        if (!mounted.current) return; // 예약한 뒤 화면이 바뀌었으면 새 화면의 초점을 빼앗지 않는다
+        if (list.total === 0) onEmptiedRef.current?.();
+        else headingRef.current?.focus();
+      });
     }
   };
 
@@ -141,10 +147,13 @@ export function PastVideos({ projectId, viewedJobId, refreshKey, onChanged, onEm
     try {
       const res = await api.deleteRender(projectId, id);
       gen.current++; // 이전에 보낸 목록 조회가 지금 이후에 도착해도 쓰지 않는다
-      // 이미 "더 보기"로 펼친 항목은 접지 않는다: 지운 항목만 빼고, 서버가 알려 준 전체 개수로 더 있는지 정한다.
-      // (펼친 목록이 첫 페이지보다 짧아졌다면 서버의 첫 페이지가 더 최신이므로 그것을 쓴다.)
+      // 이미 "더 보기"로 펼친 항목은 접지 않는다: 지운 항목만 빼고 유지하되, 그 앞부분이 서버의 첫 페이지와 같을 때만이다.
+      // 다르면(예: 그 사이 다른 화면에서 새 영상이 완성됨) 펼친 목록이 "최신순 접두"라는 가정이 깨졌으므로 서버의 첫 페이지로 다시 시작한다.
+      // 길이나 전체 개수만으로는 이를 알 수 없다 — 틀린 목록에서 이어 읽으면 새 영상에 영영 닿지 못한다.
       const rest = (itemsRef.current ?? []).filter((i) => i.id !== id);
-      const next = rest.length >= res.list.items.length ? rest : res.list.items;
+      const head = res.list.items;
+      const consistent = rest.length >= head.length && head.every((h, i) => rest[i]?.id === h.id);
+      const next = consistent ? rest : head;
       setItems(next);
       setHasMore(next.length < res.list.total);
       setListError(null);
@@ -207,7 +216,7 @@ export function PastVideos({ projectId, viewedJobId, refreshKey, onChanged, onEm
 
   return (
     <section className="past" data-testid="past-videos" aria-label="이전에 만든 영상">
-      <h3 ref={headingRef} tabIndex={-1} style={{ fontSize: 14, fontWeight: 700, outline: 'none' }}>
+      <h3 ref={headingRef} tabIndex={-1} className="focus-target" style={{ fontSize: 14, fontWeight: 700 }}>
         이전에 만든 영상
       </h3>
       {unknown && (

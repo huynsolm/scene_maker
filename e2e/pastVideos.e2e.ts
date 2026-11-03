@@ -281,6 +281,8 @@ describe('이전에 만든 영상 삭제(결과 화면)', () => {
     await page.keyboard.press('Enter');
     await eventually(async () => (await items(page).count()) === 1, '목록에서 사라짐');
     await eventually(async () => page.evaluate(() => document.activeElement !== document.body && !!document.activeElement?.closest('[data-testid=past-videos]')), '초점이 목록 안에 있음');
+    // 키보드로 조작 중이므로 초점 위치가 눈에 보여야 한다(outline 이 없으면 안 됨)
+    expect(await page.evaluate(() => getComputedStyle(document.activeElement!).outlineStyle)).not.toBe('none');
     await page.close();
   });
 
@@ -306,6 +308,38 @@ describe('이전에 만든 영상 삭제(결과 화면)', () => {
     expect(await items(page).count()).toBe(14); // 15 - 1, 첫 페이지(10개)로 접히지 않았다
     expect(await page.locator('[data-testid=past-more]').count()).toBe(0);
     expect(new Set(await ids(page)).size).toBe(14);
+    await page.close();
+  });
+
+  it('후속 검수 P2: 펼친 목록을 보는 동안 다른 곳에서 새 영상이 완성돼도, 삭제 뒤 새 영상이 누락되지 않고 "더 보기"로 끝까지 이어진다', async () => {
+    const { project, firstJob } = await projectWithVideo('새 영상 누락 방지');
+    const all = [firstJob];
+    for (let i = 1; i <= 14; i++) all.push(cloneJob(firstJob, { minutesAgo: 2000 - i * 10 })); // 15편
+    db().prepare(`UPDATE render_jobs SET created_at = ?, finished_at = ? WHERE id = ?`).run(new Date(Date.now() - 3000 * 60_000).toISOString(), new Date(Date.now() - 3000 * 60_000).toISOString(), firstJob);
+    const page = await env.newPage();
+    await page.goto(`${env.base}/projects/${project.id}/result/${all[14]}`);
+    await items(page).first().waitFor();
+    await page.locator('[data-testid=past-more]').click();
+    await eventually(async () => (await items(page).count()) === 15, '15편 모두 펼침');
+
+    const fresh = cloneJob(firstJob, { minutesAgo: -5 }); // 다른 화면에서 가장 최근 영상이 새로 완성됨(이 화면은 모른다)
+    const victim = all[3]!;
+    await openDeleteDialog(page, victim);
+    await page.locator('[data-testid=confirm-delete-video]').click();
+    await eventually(async () => (await page.locator(`[data-id="${victim}"]`).count()) === 0, '지운 영상이 사라짐');
+
+    expect((await ids(page))[0]).toBe(fresh); // 새 영상이 맨 위에 나타난다
+    // 서버에는 15편(15 - 1 + 새 영상 1)이 있다 — 화면이 일부만 보이더라도 "더 보기"로 전부 닿을 수 있어야 한다
+    for (let i = 0; i < 3 && (await page.locator('[data-testid=past-more]').count()) > 0; i++) {
+      await page.locator('[data-testid=past-more]').click();
+      await new Promise((r) => setTimeout(r, 300));
+    }
+    await eventually(async () => (await items(page).count()) === 15, '서버의 15편이 모두 보임');
+    const seen = await ids(page);
+    expect(new Set(seen).size).toBe(15);
+    expect(seen).toContain(fresh);
+    expect(seen).not.toContain(victim);
+    expect(await page.locator('[data-testid=past-more]').count()).toBe(0);
     await page.close();
   });
 
