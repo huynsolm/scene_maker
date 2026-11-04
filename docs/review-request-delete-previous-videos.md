@@ -198,3 +198,35 @@ npm run build && npx vitest run --config vitest.e2e.config.ts e2e/pastVideos.e2e
 | 초점 fallback | `:focus-visible` 미지원 브라우저에서는 윤곽선이 전혀 없음 | 기본 `:focus`에 윤곽선을 두고 `:focus:not(:focus-visible)`에서만 지움(미지원이면 후자가 무시되어 윤곽선이 남음). `:focus` 윤곽선을 없애면 초점 E2E가 실패함을 확인 |
 | 수용 | `rest`가 첫 페이지보다 짧을 때 `head` 사용, `requestAnimationFrame` 취소와 콜백 내부 `mounted` 검사의 병행 | 변경 없음 |
 참고: 이 방식은 삭제 때마다 추가 요청이 생긴다(펼친 개수가 10 이하면 없음, 그 이상이면 1~수 회). 단일 사용자 로컬 앱이라 수용했다.
+
+## 13. 재검수 요청 (커밋 `1017edd`, 기준 `main` = `ea52468`)
+§12에서 처리한 코덱스 지적(펼친 범위 안쪽의 삭제, 빈 목록)의 수정이 맞는지 병합 전에 한 번 더 확인해 달라는 요청이다. 같은 "목록 정합성" 문제를 두 번 연속 짚었으므로, 이번에는 캐시 비교를 버리고 서버 재조회로 바꾼 설계 자체를 봐 달라.
+
+### 13.1 범위
+- 이번 수정만: `git diff 5e9717c..1017edd` — `web/screens/PastVideos.tsx`, `web/api.ts`(`listRenders`에 `limit`), `web/styles.css`, `e2e/pastVideos.e2e.ts`, 문서. 서버는 바꾸지 않았다.
+- 후속 변경 전체(PR 예정): `git diff ea52468..1017edd`.
+
+### 13.2 변경 요약
+- `remove` 성공 뒤: `readRange(res.list, target, g)` — 삭제 응답의 첫 페이지에서 시작해 `target = 펼쳐 둔 개수 − 1`(지운 항목 제외)에 닿을 때까지 `api.listRenders(projectId, 마지막 id, min(50, 남은 개수))`로 이어 읽는다. 읽는 중 예외가 나면 `{ items: 첫 페이지, hasMore: 첫 페이지.hasMore }`로 후퇴. 응답이 오면 `g === gen.current && mounted.current`일 때만 `setItems/setHasMore`.
+- 접두 일치 비교(`consistent`)와 `total` 기반 `hasMore` 계산은 삭제했다. `hasMore`는 마지막으로 읽은 페이지의 서버 값이다.
+- CSS: `.focus-target:focus`에 윤곽선, `.focus-target:focus:not(:focus-visible)`에서만 `outline: none`.
+
+### 13.3 검증 상태
+- CI #68 성공(타입 검사, 단위·API 159개, 빌드, E2E 78개). 로컬도 같음.
+- 신규 E2E 3개: (1) 21편 중 20편 펼침 → 다른 탭이 12번째 영상 삭제 → 여기서 3번째 삭제 → 화면이 서버 목록과 정확히 같음, "더 보기" 없음 (2) 서버 목록이 비면 캐시의 삭제된 항목도 사라짐 (3) 이어 읽기 요청만 실패시키면 첫 페이지(10개)로 후퇴하고 "더 보기"로 19편까지 읽힘.
+- 변이 검사: 서버 재조회를 예전 접두 비교로 되돌리면 (1)(2) 실패, 후퇴 로직을 지우면 (3) 실패, `:focus` 윤곽선을 없애면 초점 E2E 실패.
+
+### 13.4 특히 봐 주었으면 하는 부분 (스스로 의심하는 곳)
+1. **재조회 중 경쟁**: 삭제 응답 → 여러 페이지를 순차로 읽는 동안 `busyRef`는 유지되어 다른 삭제는 막히지만 "더 보기"(`loadMore`)나 `refreshKey` 재조회는 끼어들 수 있다. `gen`을 삭제 응답 직후에 한 번 올리고(`g`), `readRange` 안에서 페이지마다 `g !== gen.current`를 확인한다. `loadMore`가 같은 구간에 시작되면(자기 `gen` 캡처가 삭제 후 값이라면) 결과가 서로 덮어쓰지 않는가?
+2. **페이지 사이의 변화**: 첫 페이지와 이어 읽는 페이지는 서로 다른 시각의 응답이다. 커서가 `(finished_at, rowid)`라 새 영상이 위에 생겨도 이어 읽는 위치는 밀리지 않지만, **이어 읽는 도중 커서로 쓴 항목이 다른 탭에서 지워지면** 404가 나서 첫 페이지로 후퇴한다 — 의도한 동작이다. 중복·누락이 생기는 다른 경로가 있는가?
+3. **지연과 시간 제한**: 펼친 목록이 크면(예: 200편 → 요청 4회) 삭제 한 번에 요청이 여러 번이고 그동안 삭제 버튼이 `busy`로 잠긴다. 요청마다 30초 제한이 걸리는데, 중간에 시간 초과가 나면 후퇴(첫 페이지)로 처리한다. 사용자 입장에서 "삭제 성공"인데 목록이 접히는 동작이 혼란스러울 수 있다 — 수용 가능한가?
+4. **`page.items.length === 0`이면 중단**: 서버가 `hasMore=true`인데 빈 페이지를 주는 불일치 상황에서 무한 반복을 막기 위한 방어다. 이 경우 `hasMore`가 서버 값(참) 그대로 남는다 — 의도대로인가?
+5. **404·재확인 경로는 여전히 `loadFirst`로 첫 페이지로 접힌다**(이전 검수에서 수용). 일관성 면에서 이번 변경으로 상황이 달라졌는가?
+6. **`itemsRef`의 시점**: 목표 개수를 `itemsRef.current.length − 1`로 잡는데, 이 ref는 렌더 때 갱신된다. 삭제 확인 창을 연 뒤 응답이 오기까지 사이에 `refreshKey` 재조회로 목록이 바뀌었다면 목표가 어긋날 수 있다. 영향이 있는가?
+
+### 13.5 재현
+```
+npm ci && npm run typecheck && npm test
+npm run build && npm run test:e2e
+npm run build && npx vitest run --config vitest.e2e.config.ts e2e/pastVideos.e2e.ts -t "후속|코덱스|후퇴"
+```
