@@ -23,6 +23,7 @@ export function ResultScreen({ projectId, jobId }: Props) {
   const [missing, setMissing] = useState(false); // 없는 작업이거나 이 프로젝트의 작업이 아님
   const [retrying, setRetrying] = useState(false);
   const retryingRef = useRef(false);
+  const sceneHeadingRef = useRef<HTMLHeadingElement>(null); // 이전 영상 목록이 비면 초점을 받는다
   const [projectVersion, setProjectVersion] = useState(0); // 영상을 지운 뒤 lastVideo 를 다시 읽기 위해 올린다
   const toast = useToast();
 
@@ -143,7 +144,9 @@ export function ResultScreen({ projectId, jobId }: Props) {
               )}
             </div>
             <section style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              <h3 style={{ fontSize: 14, fontWeight: 700 }}>구성 장면</h3>
+              <h3 ref={sceneHeadingRef} tabIndex={-1} className="focus-target" style={{ fontSize: 14, fontWeight: 700 }}>
+                구성 장면
+              </h3>
               <div className="scene-summary">
                 {job.snapshot.scenes.map((s) => (
                   <div key={s.position}>
@@ -166,6 +169,7 @@ export function ResultScreen({ projectId, jobId }: Props) {
               viewedJobId={job.id}
               refreshKey={`${job.id}:${job.status}`}
               onChanged={() => setProjectVersion((v) => v + 1)}
+              onEmptied={() => sceneHeadingRef.current?.focus()}
             />
           </div>
 

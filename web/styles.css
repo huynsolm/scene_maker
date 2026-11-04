@@ -298,3 +298,8 @@ a.btn, a.btn:hover { text-decoration: none; }
 .past-item .meta { flex: 1 1 200px; min-width: 0; display: flex; flex-direction: column; gap: 2px; font-size: 13px; }
 .past-item .actions { display: flex; gap: 6px; flex-wrap: wrap; }
 .past-item .tag-cur { font-size: 12px; color: var(--primary-text); font-weight: 600; }
+
+/* 프로그램으로 초점을 옮기는 제목: 키보드로 조작 중일 때만 눈에 보이는 표시를 그린다(마우스 클릭에는 그리지 않는다) */
+.focus-target:focus { outline: 2px solid var(--primary); outline-offset: 3px; border-radius: 4px; }
+/* :focus-visible 를 지원하는 브라우저에서만 마우스 조작 뒤의 윤곽선을 지운다(미지원이면 이 규칙이 무시되어 윤곽선이 남는다) */
+.focus-target:focus:not(:focus-visible) { outline: none; }

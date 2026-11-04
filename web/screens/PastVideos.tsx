@@ -14,13 +14,15 @@ interface Props {
   refreshKey: string;
   /** 영상을 지운 뒤 호출 — 상위가 "마지막 생성 영상" 같은 파생 정보를 다시 읽는다 */
   onChanged: () => void;
+  /** 마지막 영상을 지워 목록이 사라질 때 초점을 받을 곳을 상위가 정한다(이 컴포넌트는 빈 목록을 그리지 않으므로 제목도 없다) */
+  onEmptied?: () => void;
 }
 
 /**
  * 이 프로젝트의 지난 완성 영상 목록과 개별 삭제.
  * 목록 응답마다 세대 번호를 확인해, 삭제 전에 보낸 조회가 늦게 도착해도 지워진 항목이 되살아나지 않게 한다.
  */
-export function PastVideos({ projectId, viewedJobId, refreshKey, onChanged }: Props) {
+export function PastVideos({ projectId, viewedJobId, refreshKey, onChanged, onEmptied }: Props) {
   const toast = useToast();
   const [items, setItems] = useState<RenderListItem[] | null>(null);
   const [hasMore, setHasMore] = useState(false);
@@ -41,15 +43,21 @@ export function PastVideos({ projectId, viewedJobId, refreshKey, onChanged }: Pr
   // 이 화면이 아직 떠 있는가. 대상이 바뀌어 화면이 새로 만들어지면 이전 화면에서 시작한 삭제·재확인이 늦게 끝나도,
   // 전역 이동(navigate)이나 초점 이동으로 지금 화면을 건드리지 않아야 한다(상태 갱신은 언마운트되면 무시되지만 이동은 아니다).
   const mounted = useRef(true);
+  const rafId = useRef(0);
   useEffect(() => {
     mounted.current = true;
     return () => {
       mounted.current = false;
+      cancelAnimationFrame(rafId.current); // 예약해 둔 초점 이동도 취소한다
     };
   }, []);
   const headingRef = useRef<HTMLHeadingElement>(null);
   const onChangedRef = useRef(onChanged);
   onChangedRef.current = onChanged;
+  const onEmptiedRef = useRef(onEmptied);
+  onEmptiedRef.current = onEmptied;
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
 
   const apply = useCallback((list: RenderList) => {
     setItems(list.items);
@@ -122,7 +130,12 @@ export function PastVideos({ projectId, viewedJobId, refreshKey, onChanged }: Pr
       navigate(next ? `/projects/${projectId}/result/${next.id}` : `/projects/${projectId}`);
     } else {
       // 지운 항목의 버튼이 사라지므로 초점이 문서 맨 앞으로 빠지지 않게 목록 제목으로 옮긴다.
-      requestAnimationFrame(() => headingRef.current?.focus());
+      // 목록이 아예 비면 제목도 사라지므로 상위가 정한 곳으로 옮긴다.
+      rafId.current = requestAnimationFrame(() => {
+        if (!mounted.current) return; // 예약한 뒤 화면이 바뀌었으면 새 화면의 초점을 빼앗지 않는다
+        if (list.total === 0) onEmptiedRef.current?.();
+        else headingRef.current?.focus();
+      });
     }
   };
 
@@ -132,7 +145,9 @@ export function PastVideos({ projectId, viewedJobId, refreshKey, onChanged }: Pr
     setBusy(true);
     pendingId.current = id;
     try {
-      const res = await api.deleteRender(projectId, id);
+      // 펼쳐 둔 개수(지운 것 제외, 최소 한 페이지)를 보내면 서버가 삭제와 같은 동기 처리 안에서 그만큼 돌려준다 — 일관된 목록이다.
+      const keep = Math.min(200, Math.max(10, (itemsRef.current?.length ?? 0) - 1));
+      const res = await api.deleteRender(projectId, id, keep);
       gen.current++; // 이전에 보낸 목록 조회가 지금 이후에 도착해도 쓰지 않는다
       apply(res.list);
       toast.show('영상을 삭제했어요');
@@ -194,7 +209,7 @@ export function PastVideos({ projectId, viewedJobId, refreshKey, onChanged }: Pr
 
   return (
     <section className="past" data-testid="past-videos" aria-label="이전에 만든 영상">
-      <h3 ref={headingRef} tabIndex={-1} style={{ fontSize: 14, fontWeight: 700, outline: 'none' }}>
+      <h3 ref={headingRef} tabIndex={-1} className="focus-target" style={{ fontSize: 14, fontWeight: 700 }}>
         이전에 만든 영상
       </h3>
       {unknown && (
@@ -215,9 +230,10 @@ export function PastVideos({ projectId, viewedJobId, refreshKey, onChanged }: Pr
       )}
       {items && items.length > 0 && (
         <ul className="past-list">
-          {items.map((v) => {
+          {items.map((v, idx) => {
             const current = v.id === viewedJobId;
-            const what = `${formatUpdated(v.finishedAt)}에 만든 ${v.totalSec}초 영상`; // 같은 이름의 버튼이 반복되므로 어떤 영상인지 이름에 넣는다
+            // 같은 이름의 버튼이 반복되므로 어떤 영상인지 이름에 넣는다. 같은 분에 만든 같은 길이의 영상도 구별되도록 최신순 번호를 붙인다.
+            const what = `최신순 ${idx + 1}번째, ${formatUpdated(v.finishedAt)}에 만든 ${v.totalSec}초 영상`;
             return (
               <li key={v.id} className="past-item" data-testid="past-item" data-id={v.id} data-current={current}>
                 <div className="meta">

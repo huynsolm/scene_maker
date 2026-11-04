@@ -186,7 +186,7 @@ export class RenderStore {
    * `projects.updated_at` 은 바꾸지 않는다 — 삭제는 편집 내용의 변경이 아니며, 바꾸면 남은 영상이 모두 '내용이 바뀐 뒤'로 표시된다.
    * 서버는 단일 프로세스이고 이 구간이 동기 실행이라 요청 사이의 끼어들기가 없다(파일 작업을 비동기로 바꾸면 다시 검토해야 한다).
    */
-  deleteVideo(projectId: string, jobId: string): { removedImages: number } {
+  deleteVideo<T = undefined>(projectId: string, jobId: string, readAfter?: () => T): { removedImages: number; after: T } {
     const job = this.getJob(jobId);
     if (!job || job.project_id !== projectId) throw notFound('영상'); // 다른 프로젝트의 작업은 없는 것으로 취급
     if (job.status === 'waiting' || job.status === 'generating') {
@@ -196,19 +196,31 @@ export class RenderStore {
       throw new AppError('RENDER_NOT_DELETABLE', 409, '완성된 영상만 지울 수 있어요.');
     }
     let imageIds: string[] = [];
+    let after = undefined as T;
     this.db.transaction(() => {
       imageIds = (this.db.prepare(`SELECT image_id FROM render_job_images WHERE job_id = ?`).all(jobId) as Array<{ image_id: string }>).map(
         (r) => r.image_id,
       );
       this.db.prepare(`DELETE FROM render_jobs WHERE id = ?`).run(jobId);
       this.recomputeProjectStatus(projectId);
+      // 응답에 쓸 목록 등은 같은 트랜잭션 안에서 읽는다. 여기서 예외가 나면 삭제도 되돌려,
+      // "영상은 지워졌는데 응답은 실패"처럼 응답이 실제 상태와 반대가 되지 않게 한다.
+      if (readAfter) after = readAfter();
     })();
 
+    // 커밋 뒤의 파일·이미지 회수는 최선만 다한다: 하나가 실패해도 로그만 남기고 계속하며 응답을 뒤집지 않는다.
+    // 남은 파일은 safeRm 이, 남은 이미지 행·파일은 서버 시작 시 sweepOrphans 가 정리한다.
     safeRm(this.videoPathFor(projectId, jobId));
     rmdirIfEmpty(path.join(this.store.videosDir, projectId));
     let removedImages = 0;
-    for (const id of imageIds) if (this.store.collectImageIfUnused(id)) removedImages++;
-    return { removedImages };
+    for (const id of imageIds) {
+      try {
+        if (this.store.collectImageIfUnused(id)) removedImages++;
+      } catch (e) {
+        console.warn(`[이미지 회수 실패] ${id} (${(e as Error)?.message ?? e}) — 다음 서버 시작 때 다시 정리한다`);
+      }
+    }
+    return { removedImages, after };
   }
 
   /**
