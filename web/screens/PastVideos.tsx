@@ -65,11 +65,16 @@ export function PastVideos({ projectId, viewedJobId, refreshKey, onChanged, onEm
     setListError(null);
   }, []);
 
-  /** 처음 페이지를 다시 읽는다. 성공하면 목록을 돌려주고, 낡은 응답이거나 실패하면 null. */
+  /**
+   * 목록을 처음부터 다시 읽는다. 이미 "더 보기"로 펼쳐 둔 개수(최소 한 페이지, 최대 200)만큼 한 번에 읽어, 다시 읽어도 접히지 않는다
+   * (보던 작업이 완성됐을 때, 이미 삭제된 영상·삭제 불가·결과 재확인 같은 복구 경로). 한 번의 요청이라 일관된 목록이다.
+   * 성공하면 목록을 돌려주고, 낡은 응답이거나 실패하면 null.
+   */
   const loadFirst = useCallback(async (): Promise<RenderList | null> => {
     const g = ++gen.current;
+    const range = Math.min(200, Math.max(10, itemsRef.current?.length ?? 0));
     try {
-      const list = await api.listRenders(projectId);
+      const list = await api.listRenders(projectId, undefined, range);
       if (g !== gen.current) return null;
       apply(list);
       return list;

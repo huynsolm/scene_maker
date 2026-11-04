@@ -127,11 +127,11 @@ export async function buildApp(config: AppConfig, deps: { renderer?: Renderer } 
     return reply.status(202).send({ job: renders.toView(job) });
   });
 
-  // 지난 영상 목록(완성된 영상만, 최신순). `limit`(기본 10, 최대 50)과 `before`(직전 페이지 마지막 항목의 id)로 나누어 읽는다.
+  // 지난 영상 목록(완성된 영상만, 최신순). `limit`(기본 10, 최대 200)과 `before`(직전 페이지 마지막 항목의 id)로 나누어 읽는다.
   app.get<IdParams & { Querystring: { limit?: string; before?: string } }>('/api/projects/:id/renders', async (req) => {
     const q = z
       .object({
-        limit: z.coerce.number().int().min(1).max(50).default(10),
+        limit: z.coerce.number().int().min(1).max(200).default(10), // 화면이 펼친 개수만큼 한 번에 다시 읽을 수 있게 삭제 응답(keep)과 같은 상한
         before: z.string().regex(/^[0-9a-f-]{36}$/).optional(),
       })
       .parse(req.query);

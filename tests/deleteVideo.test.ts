@@ -96,7 +96,8 @@ describe('지난 영상 목록', () => {
     const a = await setup();
     const id = await render(a);
     expect((await list(a, '?limit=0')).statusCode).toBe(400);
-    expect((await list(a, '?limit=51')).statusCode).toBe(400);
+    expect((await list(a, '?limit=201')).statusCode).toBe(400);
+    expect((await list(a, '?limit=200')).statusCode).toBe(200); // 화면이 펼친 개수만큼 한 번에 다시 읽는 상한
     expect((await list(a, '?before=not-an-id')).statusCode).toBe(400);
     expect((await list(a, '', '00000000-0000-4000-8000-000000000000')).statusCode).toBe(404);
     expect((await del(a, id)).statusCode).toBe(200);
