@@ -122,23 +122,39 @@ export function PastVideos({ projectId, viewedJobId, refreshKey, onChanged, onEm
 
   /**
    * 삭제 응답의 첫 페이지(`first`)에서 시작해, 사용자가 펼쳐 두었던 개수(`target`)만큼 커서로 이어 읽는다(요청당 최대 50).
-   * 읽는 중 하나라도 실패하면 서버의 첫 페이지만 쓴다(접히지만 틀리지는 않는다).
+   *
+   * 서로 다른 시각에 받은 서버 페이지들은 그대로는 한 목록이 아니다: 읽는 사이 새 영상이 완성되면 그것은 맨 위에 생기는데,
+   * 이어 읽기의 커서는 첫 페이지의 마지막 항목이라 그보다 위의 변화를 영영 읽지 못한다(그 영상은 새로고침 전까지 접근 불가).
+   * 그래서 이어 읽었다면 마지막에 최신 첫 페이지를 한 번 더 읽어 처음 받은 첫 페이지와 id 가 같은지 확인한다. 다르면 그 최신 첫 페이지부터 다시 읽는다(최대 3번).
+   * 총개수만 비교하면 "한 편 추가 + 한 편 삭제" 같은 변화를 놓치지만, 새 영상은 항상 맨 위에 오므로 첫 페이지 비교는 놓치지 않는다.
+   * 읽는 중 실패하거나 계속 어긋나면 가장 최근에 받은 첫 페이지만 쓴다(접히지만 틀리지는 않는다).
    */
   const readRange = async (first: RenderList, target: number, g: number): Promise<{ items: RenderListItem[]; hasMore: boolean }> => {
-    let items = first.items;
-    let hasMore = first.hasMore;
+    let head = first;
+    const sameIds = (a: RenderListItem[], b: RenderListItem[]) => a.length === b.length && a.every((x, i) => x.id === b[i]!.id);
     try {
-      while (items.length < target && hasMore) {
-        const page = await api.listRenders(projectId, items[items.length - 1]!.id, Math.min(50, target - items.length));
-        if (g !== gen.current) break; // 그 사이 더 새로운 읽기가 시작됐다 — 호출한 쪽이 이 결과를 버린다
-        items = [...items, ...page.items];
-        hasMore = page.hasMore;
-        if (page.items.length === 0) break;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        let items = head.items;
+        let hasMore = head.hasMore;
+        let paged = false;
+        while (items.length < target && hasMore) {
+          const page = await api.listRenders(projectId, items[items.length - 1]!.id, Math.min(50, target - items.length));
+          if (g !== gen.current) return { items: head.items, hasMore: head.hasMore }; // 더 새로운 읽기가 시작됐다 — 호출한 쪽이 이 결과를 버린다
+          paged = true;
+          items = [...items, ...page.items];
+          hasMore = page.hasMore;
+          if (page.items.length === 0) break;
+        }
+        if (!paged) return { items, hasMore }; // 응답 하나로 끝났으니 일관된 목록이다
+        const check = await api.listRenders(projectId);
+        if (g !== gen.current) return { items: head.items, hasMore: head.hasMore };
+        if (sameIds(check.items, head.items)) return { items, hasMore };
+        head = check; // 읽는 사이 맨 위가 바뀌었다 — 최신 첫 페이지에서 다시 시작
       }
     } catch {
-      return { items: first.items, hasMore: first.hasMore };
+      return { items: head.items, hasMore: head.hasMore };
     }
-    return { items, hasMore };
+    return { items: head.items, hasMore: head.hasMore };
   };
 
   /** 영상이 사라진 것이 확인된 뒤의 공통 처리. 보고 있던 영상이면 남은 최신 영상(없으면 편집 화면)으로 이동한다. */

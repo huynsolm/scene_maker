@@ -399,6 +399,61 @@ describe('이전에 만든 영상 삭제(결과 화면)', () => {
     await page.close();
   });
 
+  it('후속 검수 P2(3차): 여러 페이지를 다시 읽는 사이 새 영상이 완성되고 다른 영상이 지워져 총개수가 같아져도, 새 영상이 누락되지 않는다', async () => {
+    const { project, firstJob } = await projectWithVideo('읽는 사이 변화');
+    const all = [firstJob];
+    for (let i = 1; i <= 20; i++) all.push(cloneJob(firstJob, { minutesAgo: 3000 - i * 10 })); // 21편
+    db().prepare(`UPDATE render_jobs SET created_at = ?, finished_at = ? WHERE id = ?`).run(new Date(Date.now() - 4000 * 60_000).toISOString(), new Date(Date.now() - 4000 * 60_000).toISOString(), firstJob);
+    const page = await env.newPage();
+    await page.goto(`${env.base}/projects/${project.id}/result/${all[20]}`);
+    await items(page).first().waitFor();
+    await page.locator('[data-testid=past-more]').click();
+    await eventually(async () => (await items(page).count()) === 20, '최신 20편 펼침');
+
+    // 이어 읽기 요청(커서가 있는 첫 번째)을 서버가 처리한 "직후"에, 새 영상 완성 + 오래된 영상 삭제를 끼워 넣는다(총개수 불변)
+    let fresh = '';
+    const other = all[8]!; // 최신순 13번째 — 첫 페이지 밖이고 이어 읽는 범위 안
+    let fired = false;
+    const pagedUrl = (u: URL) => /\/api\/projects\/[^/]+\/renders$/.test(u.pathname) && u.searchParams.has('before');
+    await page.route(pagedUrl, async (route) => {
+      if (fired) return route.continue();
+      fired = true;
+      const response = await route.fetch(); // 옛 상태의 페이지를 확정
+      fresh = cloneJob(firstJob, { minutesAgo: -10 }); // 가장 최신 영상이 새로 완성됨
+      expect((await api(`/api/projects/${project.id}/renders/${other}`, { method: 'DELETE' })).status).toBe(200); // 총개수는 그대로
+      await route.fulfill({ response });
+    });
+    const victim = all[18]!;
+    await openDeleteDialog(page, victim);
+    await page.locator('[data-testid=confirm-delete-video]').click();
+    await eventually(async () => fired, '이어 읽기 요청이 보내짐');
+    await page.locator('.toast:has-text("영상을 삭제했어요")').waitFor();
+
+    const server = async () => {
+      const out: string[] = [];
+      let before = '';
+      for (;;) {
+        const l = (await api(`/api/projects/${project.id}/renders?limit=50${before ? `&before=${before}` : ''}`)).body.list;
+        out.push(...l.items.map((i: { id: string }) => i.id));
+        if (!l.hasMore) return out;
+        before = out[out.length - 1]!;
+      }
+    };
+    const expected = await server();
+    expect(expected[0]).toBe(fresh);
+    await eventually(async () => (await page.locator(`[data-id="${fresh}"]`).count()) === 1, '새 영상이 목록에 나타남'); // 누락되면 새로고침 전까지 영영 안 나타난다
+    const shown = await ids(page);
+    expect(new Set(shown).size).toBe(shown.length);
+    expect(shown).toEqual(expected.slice(0, shown.length)); // 서버 순서의 접두 — 지워진 영상(other)이 남지 않는다
+    expect(shown).not.toContain(other);
+    for (let i = 0; i < 5 && (await page.locator('[data-testid=past-more]').count()) > 0; i++) {
+      await page.locator('[data-testid=past-more]').click();
+      await new Promise((r) => setTimeout(r, 300));
+    }
+    expect(await ids(page)).toEqual(expected); // "더 보기"로 끝까지 읽으면 서버와 정확히 같다
+    await page.close();
+  });
+
   it('후속 검수 P2(재): 서버 목록이 비면 캐시에 남은 삭제된 항목도 사라진다', async () => {
     const { project, firstJob } = await projectWithVideo('빈 목록 정합');
     const C = cloneJob(firstJob, { minutesAgo: 5 });
