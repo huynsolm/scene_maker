@@ -138,10 +138,14 @@ export async function buildApp(config: AppConfig, deps: { renderer?: Renderer } 
     return { list: renders.listDone(req.params.id, q) };
   });
 
-  // 완성된 영상 하나를 지운다. 프로젝트 소속을 요구한다(다른 프로젝트의 작업 id 는 404). 응답은 갱신된 목록 첫 페이지와 lastVideo.
-  app.delete<{ Params: { id: string; jobId: string } }>('/api/projects/:id/renders/:jobId', async (req) => {
+  // 완성된 영상 하나를 지운다. 프로젝트 소속을 요구한다(다른 프로젝트의 작업 id 는 404).
+  // 응답은 갱신된 목록의 앞 `keep`개(기본 10, 최대 200)와 lastVideo 다. 화면이 "더 보기"로 펼친 개수를 `keep`으로 보내면,
+  // 삭제와 목록 읽기가 이 한 번의 동기 처리 안에서 끝나므로 서로 다른 시각의 응답을 이어 붙일 필요가 없다(그 방식은 새 영상이 중간에
+  // 끼어드는 경우 등을 막을 수 없다). 200을 넘게 펼쳤다면 200개로 접히고 `hasMore`가 나머지를 알려 준다.
+  app.delete<{ Params: { id: string; jobId: string }; Querystring: { keep?: string } }>('/api/projects/:id/renders/:jobId', async (req) => {
+    const q = z.object({ keep: z.coerce.number().int().min(1).max(200).default(10) }).parse(req.query); // 삭제하기 전에 검증한다
     renders.deleteVideo(req.params.id, req.params.jobId);
-    return { list: renders.listDone(req.params.id, { limit: 10 }), lastVideo: store.getProject(req.params.id).lastVideo };
+    return { list: renders.listDone(req.params.id, { limit: q.keep }), lastVideo: store.getProject(req.params.id).lastVideo };
   });
 
   app.get<IdParams>('/api/projects/:id/renders/latest', async (req) => {

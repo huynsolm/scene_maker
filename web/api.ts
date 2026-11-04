@@ -101,11 +101,11 @@ export const api = {
   latestRender: (id: string) =>
     request<{ job: RenderJobView | null }>('GET', `/api/projects/${id}/renders/latest`).then((r) => r.job),
   /** 완성된 지난 영상 목록(최신순). `before` 는 직전 페이지 마지막 항목의 id. 기준 항목이 이미 지워졌으면 404. */
-  listRenders: (id: string, before?: string, limit = 10) =>
-    request<{ list: RenderList }>('GET', `/api/projects/${id}/renders?limit=${limit}${before ? `&before=${before}` : ''}`).then((r) => r.list),
-  /** 완성된 영상 하나를 지운다. 응답은 갱신된 목록 첫 페이지. */
-  deleteRender: (projectId: string, jobId: string) =>
-    request<{ list: RenderList; lastVideo: Project['lastVideo'] }>('DELETE', `/api/projects/${projectId}/renders/${jobId}`),
+  listRenders: (id: string, before?: string) =>
+    request<{ list: RenderList }>('GET', `/api/projects/${id}/renders?limit=10${before ? `&before=${before}` : ''}`).then((r) => r.list),
+  /** 완성된 영상 하나를 지운다. 응답은 갱신된 목록의 앞 `keep`개(서버가 삭제와 같은 동기 처리 안에서 읽어 일관된다). */
+  deleteRender: (projectId: string, jobId: string, keep = 10) =>
+    request<{ list: RenderList; lastVideo: Project['lastVideo'] }>('DELETE', `/api/projects/${projectId}/renders/${jobId}?keep=${keep}`),
   uploadImage: (id: string, sceneId: string, file: File) => {
     const form = new FormData();
     form.append('file', file);

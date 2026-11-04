@@ -285,6 +285,43 @@ describe('삭제 뒤 프로젝트 상태 · 대체 영상', () => {
   });
 });
 
+describe('삭제 응답의 목록 범위(keep)', () => {
+  it('keep 으로 요청한 개수만큼 삭제와 같은 응답에서 돌려주고, 기본은 10개이며, 지운 영상은 빠져 있다', async () => {
+    const a = await setup();
+    const ids: string[] = [];
+    for (let i = 0; i < 13; i++) ids.push(await render(a));
+    const newest = [...ids].reverse();
+    const r15 = await a.app.inject({ method: 'DELETE', url: `/api/projects/${a.project.id}/renders/${newest[3]}?keep=15` });
+    expect(r15.statusCode).toBe(200);
+    const l15 = r15.json().list;
+    expect(l15.items.map((i: any) => i.id)).toEqual(newest.filter((x) => x !== newest[3])); // 12편 전부, 지운 영상 없음
+    expect(l15.total).toBe(12);
+    expect(l15.hasMore).toBe(false);
+
+    const r5 = await a.app.inject({ method: 'DELETE', url: `/api/projects/${a.project.id}/renders/${newest[0]}?keep=5` });
+    const l5 = r5.json().list;
+    expect(l5.items.length).toBe(5);
+    expect(l5.hasMore).toBe(true);
+    expect(l5.total).toBe(11);
+
+    const rDefault = await a.app.inject({ method: 'DELETE', url: `/api/projects/${a.project.id}/renders/${newest[1]}` });
+    expect(rDefault.json().list.items.length).toBe(10); // keep 을 안 보내면 기존처럼 첫 페이지 10개
+  });
+
+  it('잘못된 keep(0·201·글자)은 400 이고, 검증이 삭제보다 먼저라 영상은 지워지지 않는다', async () => {
+    const a = await setup();
+    const id = await render(a);
+    for (const bad of ['0', '201', 'abc', '-1', '1.5']) {
+      const res = await a.app.inject({ method: 'DELETE', url: `/api/projects/${a.project.id}/renders/${id}?keep=${bad}` });
+      expect(res.statusCode, `keep=${bad}`).toBe(400);
+    }
+    expect(jobRow(a, id)).toBeDefined();
+    expect(fs.existsSync(videoFile(a, id))).toBe(true);
+    const ok = await a.app.inject({ method: 'DELETE', url: `/api/projects/${a.project.id}/renders/${id}?keep=200` }); // 상한은 허용
+    expect(ok.statusCode).toBe(200);
+  });
+});
+
 describe('파일 삭제 실패와 재시작 회수', () => {
   const lock = (target: string) => {
     const real = fs.rmSync;
