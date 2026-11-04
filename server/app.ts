@@ -144,8 +144,12 @@ export async function buildApp(config: AppConfig, deps: { renderer?: Renderer } 
   // 끼어드는 경우 등을 막을 수 없다). 200을 넘게 펼쳤다면 200개로 접히고 `hasMore`가 나머지를 알려 준다.
   app.delete<{ Params: { id: string; jobId: string }; Querystring: { keep?: string } }>('/api/projects/:id/renders/:jobId', async (req) => {
     const q = z.object({ keep: z.coerce.number().int().min(1).max(200).default(10) }).parse(req.query); // 삭제하기 전에 검증한다
-    renders.deleteVideo(req.params.id, req.params.jobId);
-    return { list: renders.listDone(req.params.id, { limit: q.keep }), lastVideo: store.getProject(req.params.id).lastVideo };
+    // 목록과 lastVideo 는 삭제와 같은 트랜잭션 안에서 만든다(만들다 실패하면 삭제도 되돌린다).
+    const { after } = renders.deleteVideo(req.params.id, req.params.jobId, () => ({
+      list: renders.listDone(req.params.id, { limit: q.keep }),
+      lastVideo: store.getProject(req.params.id).lastVideo,
+    }));
+    return after;
   });
 
   app.get<IdParams>('/api/projects/:id/renders/latest', async (req) => {

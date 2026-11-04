@@ -322,6 +322,53 @@ describe('삭제 응답의 목록 범위(keep)', () => {
   });
 });
 
+describe('삭제 커밋 전후의 실패(응답이 실제 상태와 반대가 되지 않게)', () => {
+  it('커밋 뒤 이미지 회수가 예외를 던져도 삭제는 성공으로 응답하고, 남은 이미지는 다음 시작 때 정리된다', async () => {
+    const a = await setup();
+    const s = getProject(a).scenes.map((x) => x.image!.id);
+    const A = await render(a); // I0 I1 I2
+    await replaceImage(a, 0, [11, 22, 33]);
+    await render(a); // A 만 I0 를 참조
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    vi.spyOn(a.store, 'collectImageIfUnused').mockImplementation(() => {
+      throw new Error('boom');
+    });
+    const res = await del(a, A);
+    expect(res.statusCode).toBe(200); // 삭제는 이미 확정됐으므로 성공으로 알린다
+    expect(jobRow(a, A)).toBeUndefined();
+    expect(res.json().list.items.map((i: any) => i.id)).not.toContain(A);
+    expect(fs.existsSync(videoFile(a, A))).toBe(false);
+    expect(imageRow(a, s[0]!)).toBe(true); // 회수는 실패해 남아 있다
+    expect(warn.mock.calls.some((c) => String(c[0]).includes('이미지 회수 실패'))).toBe(true);
+
+    vi.restoreAllMocks();
+    const restarted = await makeApp(a.dataDir); // 다음 시작
+    apps.push(restarted.app);
+    const left = (restarted.store as any).db.prepare(`SELECT 1 FROM images WHERE id = ?`).get(s[0]);
+    expect(left).toBeUndefined(); // 아무도 참조하지 않는 이미지가 시작 시 정리됐다
+  });
+
+  it('응답 목록을 만드는 중 예외가 나면 500 이고, 같은 트랜잭션이라 삭제도 되돌려진다(영상·연결·상태 그대로)', async () => {
+    const a = await setup();
+    const A = await render(a);
+    const linksBefore = linkedImages(a, A);
+    const statusBefore = projectRow(a).status;
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.spyOn(a.renders, 'listDone').mockImplementation(() => {
+      throw new Error('boom');
+    });
+    const res = await del(a, A);
+    expect(res.statusCode).toBe(500);
+    expect(jobRow(a, A)).toBeDefined(); // 롤백
+    expect(linkedImages(a, A)).toEqual(linksBefore);
+    expect(fs.existsSync(videoFile(a, A))).toBe(true); // 파일 삭제는 커밋 뒤라 일어나지 않았다
+    expect(projectRow(a).status).toBe(statusBefore);
+
+    vi.restoreAllMocks();
+    expect((await del(a, A)).statusCode).toBe(200); // 다시 시도하면 정상 삭제
+  });
+});
+
 describe('파일 삭제 실패와 재시작 회수', () => {
   const lock = (target: string) => {
     const real = fs.rmSync;
