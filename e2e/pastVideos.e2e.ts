@@ -475,6 +475,53 @@ describe('이전에 만든 영상 삭제(결과 화면)', () => {
     await page.close();
   });
 
+  it('복구 경로: 펼친 상태에서 다른 탭이 먼저 지운 영상을 지우려 하면(404) 목록을 다시 읽어도 첫 페이지로 접히지 않는다', async () => {
+    const { project, firstJob } = await projectWithVideo('404 뒤 펼친 목록');
+    const all = [firstJob];
+    for (let i = 1; i <= 14; i++) all.push(cloneJob(firstJob, { minutesAgo: 2000 - i * 10 })); // 15편
+    db().prepare(`UPDATE render_jobs SET created_at = ?, finished_at = ? WHERE id = ?`).run(new Date(Date.now() - 3000 * 60_000).toISOString(), new Date(Date.now() - 3000 * 60_000).toISOString(), firstJob);
+    const page = await env.newPage();
+    await page.goto(`${env.base}/projects/${project.id}/result/${all[14]}`);
+    await items(page).first().waitFor();
+    await page.locator('[data-testid=past-more]').click();
+    await eventually(async () => (await items(page).count()) === 15, '15편 펼침');
+    const victim = all[3]!; // 최신순 12번째 — 두 번째 페이지
+    await openDeleteDialog(page, victim);
+    expect((await api(`/api/projects/${project.id}/renders/${victim}`, { method: 'DELETE' })).status).toBe(200); // 다른 탭이 먼저 지움
+    await page.locator('[data-testid=confirm-delete-video]').click();
+    await page.locator('.toast:has-text("이미 삭제된 영상이에요")').waitFor();
+    await eventually(async () => (await page.locator(`[data-id="${victim}"]`).count()) === 0, '목록을 다시 읽음');
+    expect(await items(page).count()).toBe(14); // 10개로 접히지 않고 남은 14편이 모두 보인다
+    expect(await page.locator('[data-testid=past-more]').count()).toBe(0);
+    await page.close();
+  });
+
+  it('복구 경로: 보고 있던 작업이 완성돼 목록을 다시 읽어도, 펼쳐 둔 목록이 첫 페이지로 접히지 않는다', async () => {
+    const { project, firstJob } = await projectWithVideo('완성 뒤 펼친 목록');
+    const all = [firstJob];
+    for (let i = 1; i <= 14; i++) all.push(cloneJob(firstJob, { minutesAgo: 2000 - i * 10 })); // 완성 15편
+    db().prepare(`UPDATE render_jobs SET created_at = ?, finished_at = ? WHERE id = ?`).run(new Date(Date.now() - 3000 * 60_000).toISOString(), new Date(Date.now() - 3000 * 60_000).toISOString(), firstJob);
+    const B = cloneJob(firstJob, { status: 'generating', minutesAgo: -1 });
+    const page = await env.newPage();
+    await page.goto(`${env.base}/projects/${project.id}/result/${B}`);
+    await page.locator('[data-screen=result][data-status=generating]').waitFor();
+    await items(page).first().waitFor();
+    await page.locator('[data-testid=past-more]').click();
+    await eventually(async () => (await items(page).count()) === 15, '15편 펼침');
+    // B 가 완성된다 → 화면이 목록을 다시 읽는다
+    db().prepare(`UPDATE render_jobs SET status = 'done', step = 3, video_file = ?, finished_at = ? WHERE id = ?`).run('x', new Date().toISOString(), B);
+    fs.writeFileSync(path.join(env.dataDir, 'videos', project.id, `${B}.mp4`), 'x');
+    await page.locator('[data-screen=result][data-status=done]').waitFor({ timeout: 8000 });
+    await eventually(async () => (await page.locator(`[data-id="${B}"]`).count()) === 1, '완성된 B가 목록에 나타남');
+    expect(await items(page).count()).toBe(15); // 펼쳐 둔 개수만큼 다시 읽었다(10개로 접히지 않음)
+    expect((await ids(page))[0]).toBe(B);
+    expect(await page.locator('[data-testid=past-more]').count()).toBe(1); // 16편 중 15편 — 나머지 1편은 "더 보기"
+    await page.locator('[data-testid=past-more]').click();
+    await eventually(async () => (await items(page).count()) === 16, '더 보기로 16편');
+    expect(new Set(await ids(page)).size).toBe(16);
+    await page.close();
+  });
+
   it('다른 화면에서 이미 지운 영상을 지우려 하면 안내하고 목록을 새로 읽는다', async () => {
     const { project, firstJob } = await projectWithVideo('중복 삭제');
     const newer = cloneJob(firstJob, { minutesAgo: -1 });
