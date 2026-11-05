@@ -16,7 +16,7 @@
 | F2 | `loop()`는 `await this.runJob(job)`을 감싸지 않는다 | `:42-48` |
 | F3 | `runJob`의 `finally`는 `fs.rmSync(workDir, { recursive: true, force: true })`이고, `force`는 ENOENT만 무시한다(EBUSY·EPERM·EACCES는 던짐) | `:68-69`, 비교: `server/fsSafe.ts` `safeRm` 주석 |
 | F4 | `catch` 안의 `this.renders.fail()`이 던지면 `runJob` 밖으로 나간다 | `:63-66` |
-| F5 | `complete()`가 던지면 `catch` → `fail()`로 처리된다(서버는 산다) | `:61` |
+| F5 | `complete()`가 던지면 `catch` → `fail()`로 처리된다(서버는 산다) | `:62` |
 | F6 | 전역 `unhandledRejection`·`uncaughtException` 처리기가 없다 | `server/index.ts`, `server/app.ts` |
 | F7 | `close()`가 `await this.current`를 하므로, 거부된 `current`는 `app.close()`도 실패시킨다 | `:36-40`, `server/app.ts` `onClose` |
 | F8 | 남은 `tmp/<jobId>`는 다음 시작 때 `sweepFiles()`가 `tmp` 전체를 지운다 | `server/renderStore.ts` `sweepFiles` |
