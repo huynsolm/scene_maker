@@ -83,7 +83,7 @@ export interface RenderJobView {
   snapshot: {
     title: string;
     totalSec: number;
-    scenes: Array<{ position: number; text: string; durationSec: number; imageUrl: string; imageFileName: string }>;
+    scenes: Array<{ position: number; text: string; durationSec: number; imageUrl: string | null; imageFileName: string }>;
   };
   output: { width: number; height: number; fps: number } | null;
 }

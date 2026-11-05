@@ -273,7 +273,8 @@ export class RenderStore {
           position: s.position,
           text: s.text,
           durationSec: s.durationSec,
-          imageUrl: imageUrl(s.imageId),
+          // 실패 작업은 이미지를 회수하므로 주소를 주지 않는다. 회수 성공 여부와 무관하게 상태만으로 정한다.
+          imageUrl: j.status === 'failed' ? null : imageUrl(s.imageId),
           imageFileName: s.imageFileName,
         })),
       },
@@ -324,8 +325,50 @@ export class RenderStore {
     this.finish(jobId, 'done', { video_file: videoFile });
   }
 
+  /**
+   * 작업을 실패로 기록한 뒤, 그 작업이 붙잡고 있던 이미지를 놓아 준다.
+   * 실패한 작업은 다시 렌더되지 않으므로("다시 시도"는 현재 내용으로 새 작업을 만든다) 이미지가 필요 없다.
+   * 상태 기록(finish)의 예외는 그대로 던지고, 그 뒤의 회수는 최선만 다한다(`releaseImagesOf`).
+   */
   fail(jobId: string, e: RenderError) {
     this.finish(jobId, 'failed', { error_code: e.code, error_title: e.title, error_body: e.body, error_scene: e.sceneNo ?? null, error_detail: (e.detail ?? '').slice(0, 4000) || null });
+    this.releaseImagesOf(jobId);
+  }
+
+  /** 작업에 연결된 이미지 id. */
+  private linkedImageIds(jobId: string): string[] {
+    return (this.db.prepare(`SELECT image_id FROM render_job_images WHERE job_id = ?`).all(jobId) as Array<{ image_id: string }>).map(
+      (r) => r.image_id,
+    );
+  }
+
+  /** 작업의 이미지 연결을 모두 끊는다. 작업 기록 자체는 남는다. */
+  private unlinkImages(jobId: string): number {
+    return this.db.prepare(`DELETE FROM render_job_images WHERE job_id = ?`).run(jobId).changes;
+  }
+
+  /**
+   * 실패 기록이 커밋된 뒤 실행하는 후처리: 연결 이미지 id 읽기 → 연결 끊기 → 이미지마다 `collectImageIfUnused`.
+   * 현재 장면·완성 작업·진행 중 작업이 쓰는 이미지는 `collectImageIfUnused`가 남긴다.
+   * 어느 단계에서 예외가 나도 로그만 남기고 계속한다(이미지마다 따로). 실패 기록은 이미 커밋되어 뒤집히지 않고,
+   * 남은 연결·이미지는 다음 서버 시작 때 `releaseFailedImages` → `sweepOrphans`가 정리한다.
+   */
+  private releaseImagesOf(jobId: string) {
+    let ids: string[];
+    try {
+      ids = this.linkedImageIds(jobId);
+      this.unlinkImages(jobId);
+    } catch (e) {
+      console.warn(`[실패 작업 이미지 연결 해제 실패] ${jobId} (${(e as Error)?.message ?? e}) — 다음 서버 시작 때 다시 정리한다`);
+      return;
+    }
+    for (const id of ids) {
+      try {
+        this.store.collectImageIfUnused(id);
+      } catch (e) {
+        console.warn(`[이미지 회수 실패] ${id} (${(e as Error)?.message ?? e}) — 다음 서버 시작 때 다시 정리한다`);
+      }
+    }
   }
 
   /**
@@ -351,11 +394,21 @@ export class RenderStore {
 
   // ───────── 서버 시작 시 복구 ─────────
 
-  /** 대기·생성 중이던 작업을 실패로 바꾼다. 사용자가 직접 다시 시도한다. 입력과 이미지는 건드리지 않는다. */
+  /** 대기·생성 중이던 작업을 실패로 바꾼다. 사용자가 직접 다시 시도한다. 입력은 건드리지 않고, 작업이 붙잡던 이미지는 `fail`처럼 놓아 준다. */
   failInterrupted(): number {
     const rows = this.db.prepare(`SELECT id FROM render_jobs WHERE status IN ${ACTIVE}`).all() as Array<{ id: string }>;
     for (const { id } of rows) this.fail(id, serverRestarted());
     return rows.length;
+  }
+
+  /**
+   * 실패한 작업의 이미지 연결을 모두 끊는다(이 기능 이전에 쌓인 실패 기록, 회수 도중 멈춘 경우).
+   * 연결이 사라진 이미지는 뒤이어 실행하는 `sweepOrphans`가 회수한다. 매번 실행해도 안전하다.
+   */
+  releaseFailedImages(): number {
+    return this.db
+      .prepare(`DELETE FROM render_job_images WHERE job_id IN (SELECT id FROM render_jobs WHERE status = 'failed')`)
+      .run().changes;
   }
 
   /** 임시 작업 폴더와, 완료된 작업이 가리키지 않는 영상 파일(쓰다 만 파일 포함)을 지운다. */

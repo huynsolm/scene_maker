@@ -1,7 +1,7 @@
 /**
  * 디스크 사용량을 재는 스크립트. 실제 앱의 저장·렌더·정리 경로를 그대로 쓴다.
  *
- *   npm run measure:disk -- [--out report.md] [--only P1,P2]
+ *   npm run measure:disk -- [--out report.md] [--only P1,P2,P3] [--report-only]
  *
  * 프로젝트 한 개의 생애를 단계별로 따라가며 데이터 폴더의 각 부분(업로드한 원본 이미지, 완성 영상, 임시 작업 폴더, DB)의 크기를 잰다.
  *  - 업로드 직후: 원본 이미지가 얼마나 차지하는가
@@ -10,6 +10,10 @@
  *  - 지난 영상을 삭제한 뒤: 최신 영상만 남기고 모두 지우고, 마지막 영상까지 지웠을 때 디스크에 남은 파일이 "필요한 파일"과 정확히 같은지 검증한다
  *    (필요한 이미지 = 현재 장면이 쓰는 이미지 ∪ 남은 작업이 참조하는 이미지, 필요한 영상 = 남은 작업의 영상). 다르면 스크립트가 실패한다.
  *  - 프로젝트를 지운 뒤: 전부 회수되는가
+ *  - (P3) 렌더가 실패하는 다시 만들기를 반복할 때: 실패한 작업이 이미지를 붙잡지 않는가. 머리만 정상인 손상 이미지를 직접 올려
+ *    실제 렌더러(ffmpeg)가 이미지를 읽다 실패하게 한다(업로드 검사는 머리만 본다). 스크립트가 따로 기억해 둔 "남아야 할 이미지 id"
+ *    (현재 장면 ∪ 완성 작업이 만들어질 때의 장면)와 디스크의 실제 이미지 파일을 비교하고, 현재 장면 이미지가 모두 열리는지 따로 확인한다.
+ *    다르면 스크립트가 실패한다. `--report-only`는 실패 대신 비고에 적는다(변경 전 코드와 비교할 때만 쓴다).
  * 숫자는 이 컴퓨터의 파일 시스템 기준(`du`, 블록 단위)이다.
  */
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -17,6 +21,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { buildApp } from '../server/app';
+import { solidPng } from '../server/solidPng';
 
 const arg = (name: string) => {
   const i = process.argv.indexOf(`--${name}`);
@@ -24,6 +29,7 @@ const arg = (name: string) => {
 };
 
 type Kind = 'phone12mp' | 'jpeg4096';
+const reportOnly = process.argv.includes('--report-only');
 interface Plan {
   id: string;
   label: string;
@@ -34,11 +40,14 @@ interface Plan {
   cycles: number;
   /** 한 번에 바꾸는 이미지 수 */
   replaced: number;
+  /** true 면 실패하는 다시 만들기를 반복한다(runFailurePlan) */
+  failing?: boolean;
 }
 
 const PLANS: Plan[] = [
   { id: 'P1', label: '휴대폰 사진(4032x3024) 10장면 x 10초, 이미지 3장씩 바꿔 3번 더 만들기', kind: 'phone12mp', scenes: 10, seconds: 10, cycles: 3, replaced: 3 },
   { id: 'P2', label: '최대 조건: 4096x4096 사진 10장면 x 30초(300초), 한 번만 만들기', kind: 'jpeg4096', scenes: 10, seconds: 30, cycles: 0, replaced: 0 },
+  { id: 'P3', label: '휴대폰 사진(4032x3024) 10장면 x 10초, 영상 1편 뒤 같은 장면의 이미지 3장 + 손상 이미지 1장을 바꿔 실패하는 다시 만들기 3번', kind: 'phone12mp', scenes: 10, seconds: 10, cycles: 3, replaced: 3, failing: true },
 ];
 
 const TEXT = '매장에 우유가 부족한지 확인하기 어려우셨나요? 재고 화면에서 현재 수량과 부족한 품목을 확인하세요.';
@@ -191,13 +200,105 @@ async function runPlan(p: Plan, imageDir: string): Promise<Snap[]> {
   }
 }
 
+/** 업로드 폴더의 이미지 파일 → 이미지 id(저장 이름은 `<id>.<확장자>`). */
+const imageIdsOnDisk = (uploadsDir: string) => listFiles(uploadsDir).map((f) => path.basename(f).replace(/\.[^.]+$/, '')).sort();
+
+async function runFailurePlan(p: Plan, imageDir: string): Promise<Snap[]> {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), `sm-disk-${p.id}-`));
+  let built = await buildApp({ dataDir, webDist: null }, {});
+  const snaps: Snap[] = [];
+  const snap = (step: string, note?: string) =>
+    snaps.push({
+      step,
+      uploads: dirBytes(built.store.uploadsDir),
+      videos: dirBytes(built.store.videosDir),
+      tmp: dirBytes(path.join(dataDir, 'tmp')),
+      db: dbBytes(dataDir),
+      uploadFiles: countFiles(built.store.uploadsDir),
+      videoFiles: countFiles(built.store.videosDir),
+      tmpFiles: countFiles(path.join(dataDir, 'tmp')),
+      note,
+    });
+  try {
+    const image = makeImage(imageDir, p.kind);
+    // 머리(시그니처·크기)만 정상이고 본문이 잘린 PNG. 업로드는 통과하고 렌더러가 읽다 실패한다.
+    const broken = solidPng(1280, 720, [9, 9, 9]).subarray(0, 120);
+    const { store } = built;
+    snap('시작(빈 데이터 폴더)');
+    const proj = store.createProject({ title: `디스크 ${p.id}` });
+    for (let i = 3; i < p.scenes; i++) store.addScene(proj.id);
+    const cur = store.getProject(proj.id);
+    store.saveProject(proj.id, { title: `디스크 ${p.id}`, scenes: cur.scenes.map((s) => ({ id: s.id, text: TEXT, durationSec: p.seconds })) });
+    cur.scenes.forEach((_, i) => store.attachImage(proj.id, i, image, `p${i}.jpg`));
+    snap(`이미지 ${p.scenes}장 업로드`, `이미지 1장 ${mb(image.length)}MB`);
+
+    // 남아야 할 이미지 id 를 DB 와 따로 스크립트가 기억한다: 완성 작업이 만들어질 때의 장면 이미지 ∪ 현재 장면 이미지.
+    const sceneIds = () => built.store.getProject(proj.id).scenes.map((s) => s.image!.id);
+    const keepForDone = new Set<string>();
+    const render = async (label: string, want: 'done' | 'failed') => {
+      const atRequest = sceneIds();
+      const res = await built.app.inject({ method: 'POST', url: `/api/projects/${proj.id}/renders` });
+      if (res.statusCode !== 202) throw new Error(`요청 실패 ${res.statusCode} ${res.body}`);
+      const jobId = res.json().job.id as string;
+      let job: any;
+      for (;;) {
+        job = (await built.app.inject({ url: `/api/renders/${jobId}` })).json().job;
+        if (job.status === 'done' || job.status === 'failed') break;
+        await sleep(250);
+      }
+      if (job.status !== want) throw new Error(`렌더 결과가 ${want} 가 아니다: ${job.status} ${job.error?.title ?? ''}`);
+      if (want === 'done') atRequest.forEach((id) => keepForDone.add(id));
+      snap(label, want === 'failed' ? `실패: ${job.error?.title}` : undefined);
+    };
+    const check = async () => {
+      const want = [...new Set([...keepForDone, ...sceneIds()])].sort();
+      const have = imageIdsOnDisk(built.store.uploadsDir);
+      const extra = have.filter((id) => !want.includes(id));
+      const missing = want.filter((id) => !have.includes(id));
+      // 현재 장면 이미지는 따로, 실제로 열리는지 확인한다.
+      const unreadable: string[] = [];
+      for (const id of sceneIds()) {
+        const r = await built.app.inject({ url: `/api/images/${id}/file` });
+        if (r.statusCode !== 200) unreadable.push(id);
+      }
+      const msg = `기대 이미지 ${want.length}장 / 실제 ${have.length}장, 남는 파일 ${extra.length}, 빠진 파일 ${missing.length}, 열리지 않는 장면 이미지 ${unreadable.length}`;
+      if (extra.length || missing.length || unreadable.length) {
+        if (!reportOnly) throw new Error(`디스크의 이미지가 기대와 다르다 — ${msg}`);
+        return `불일치: ${msg}`;
+      }
+      return `일치: ${msg}`;
+    };
+
+    await render('영상 1편 만든 뒤', 'done');
+    for (let c = 1; c <= p.cycles; c++) {
+      store.attachImage(proj.id, 0, broken, `broken${c}.png`);
+      // 매 회차 같은 장면(1번부터 replaced 장)을 바꾼다: 2회차부터는 바로 앞 실패 작업만 참조하던 이미지가 장면에서 빠진다.
+      for (let k = 0; k < p.replaced; k++) store.attachImage(proj.id, 1 + k, image, `r${c}-${k}.jpg`);
+      await render(`(${c}회차) 이미지 ${p.replaced}장 + 손상 이미지 1장 바꾸고 실패한 뒤`, 'failed');
+      snaps[snaps.length - 1]!.note += ` — ${await check()}`;
+    }
+
+    // 다음 시작: 시작 시 정리 뒤에도 같은 상태여야 한다(지울 것도, 잃을 것도 없다).
+    await built.app.close();
+    built = await buildApp({ dataDir, webDist: null }, {});
+    snap('서버 다시 시작한 뒤', await check());
+
+    built.store.deleteProject(proj.id);
+    snap('프로젝트 삭제 뒤');
+    return snaps;
+  } finally {
+    await built.app.close();
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+}
+
 async function main() {
   const only = arg('only')?.split(',');
   const imageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sm-disk-img-'));
   const parts: string[] = ['## 디스크 사용량 측정', '', `환경: ${os.cpus().length} 코어, ${(os.totalmem() / 1024 ** 3).toFixed(0)}GB, 파일 시스템 \`du\`(블록 단위)`, ''];
   for (const p of PLANS.filter((x) => !only || only.includes(x.id))) {
     process.stderr.write(`[${p.id}] ${p.label} …\n`);
-    const snaps = await runPlan(p, imageDir);
+    const snaps = await (p.failing ? runFailurePlan(p, imageDir) : runPlan(p, imageDir));
     parts.push(`### ${p.id}. ${p.label}`, '', '| 단계 | 업로드한 이미지 | 완성 영상 | 임시 폴더 | DB | 파일 수(이미지/영상/임시) | 비고 |', '|---|---|---|---|---|---|---|');
     for (const s of snaps) {
       parts.push(`| ${s.step} | ${mb(s.uploads)}MB | ${mb(s.videos)}MB | ${mb(s.tmp)}MB | ${(s.db / 1024).toFixed(0)}KB | ${s.uploadFiles}/${s.videoFiles}/${s.tmpFiles} | ${s.note ?? ''} |`);
