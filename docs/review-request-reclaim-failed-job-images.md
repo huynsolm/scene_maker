@@ -49,3 +49,55 @@ git show e56bd03 -- docs/plan-reclaim-failed-job-images.md   # 계획 초안
 git diff e56bd03 HEAD -- docs/plan-reclaim-failed-job-images.md   # 자체 검토 반영(§4.1 순서 변경)
 ```
 위 표의 위치를 열어 사실 F1~F8을 확인하고, §5의 질문에 답해 주면 된다.
+
+---
+
+# 코덱스 검수 요청 (2차): 구현 — 1·2단계
+
+검수 대상: 브랜치 `claude/great-mayer-hvh0o2` `9c6f60b`. 기준: `main` 337a2a5. 계획 검수(위 1차)의 보완 사항을 `b36249c`로 계획에 반영한 뒤 구현했다. **제품 코드 변경은 `99d2342` 한 커밋**(서버 3파일 + 테스트)이고, 나머지는 측정 스크립트와 문서다. CI #86(`9c6f60b`) 성공.
+
+## 1. 커밋
+| 커밋 | 내용 |
+|---|---|
+| `b36249c` | 계획에 1차 검수 반영(계획 §8 표) |
+| `99d2342` | 서버: 실패 시 회수, 시작 시 정리, `imageUrl: null` + `tests/reclaimFailedImages.test.ts` 20개 |
+| `5df5c48`, `1f38bff` | 1단계 결과 기록(계획 §9), 상태 줄 정리 |
+| `b513ec1` | `scripts/measure-disk.ts` P3(실패 반복) 추가, `--report-only` |
+| `9c6f60b` | `docs/disk-usage.md` P3 결과, 계획 §10 |
+
+## 2. 구현 요약 (코드 위치)
+- `server/renderStore.ts`
+  - `fail()`(`:333`): `finish(..., 'failed')`(상태 트랜잭션, 예외는 그대로 던짐) → `releaseImagesOf(jobId)`.
+  - `releaseImagesOf()`(`:356`, private): `linkedImageIds` → `unlinkImages`를 한 `try`로 감싸고 실패하면 경고 후 반환. 그 뒤 이미지마다 `collectImageIfUnused`를 따로 `try`. 완료(`complete`)에서는 부르지 않는다.
+  - `linkedImageIds()`·`unlinkImages()`(`:339`, `:346`): 공개 메서드로 뺐다(테스트가 단계별로 예외를 주입하려고).
+  - `releaseFailedImages()`(`:408`): 실패 작업의 연결을 한 문장으로 삭제.
+  - `toView`(`:277`): `imageUrl: j.status === 'failed' ? null : imageUrl(...)`.
+  - `failInterrupted()`는 그대로 `fail()`을 부르므로 중단된 작업도 시작 때 같은 회수를 거친다(주석만 고침).
+- `server/app.ts:44-51`: `failInterrupted()` → `try { releaseFailedImages() } catch { 경고 }` → `sweepFiles()` → `sweepOrphans()`.
+- `shared/types.ts:86`: `imageUrl: string | null`. `web/`는 이 필드를 읽지 않아 타입 검사만 통과하면 된다.
+
+## 3. 검증
+- 새 테스트 20개(계획 §5.1 전부): 기본 동작 11, 단계별 실패 주입 3(id 읽기 / 연결 삭제 / 첫 이미지 회수), 시작 시 6(옛 데이터·멱등, 여러 실패 기록 공유 + 완성 작업 공유, 충돌 복구 a·b, `failInterrupted`, 시작 시 정리 예외).
+- 기존 서버 코드에 새 테스트를 돌리면 16개 실패, 4개 통과(완성 작업 보호 2, 실패 기록·409, 다시 시도 — 원래 성립해야 하는 동작).
+- 변이 9종 모두 잡힘(계획 §9에 실패 수). 전체 단위·API 183, E2E 80, 타입 검사 통과.
+- 실측 P3(계획 §10, `docs/disk-usage.md`): 변경 전 14→18→22장(실패마다 약 14.7MB), 엄격 모드는 2회차에 스크립트 실패. 변경 후 14장 유지, 서버 재시작 뒤에도 기대 id와 일치. P1·P2 재측정도 모든 검사 일치.
+
+## 4. 특히 봐 주었으면 하는 부분 (스스로 의심하는 곳)
+1. **id 읽기와 연결 삭제가 트랜잭션이 아니다**: 단일 프로세스·동기 실행이라 둘 사이에 다른 요청이 끼지 않는다고 보았다. 읽은 뒤 삭제가 실패하면 회수하지 않고 반환한다(연결이 남아 어차피 못 지움). 맞는가?
+2. **`linkedImageIds`·`unlinkImages`를 공개로 둔 것**: 테스트 주입을 위해서다. 다른 곳에서 잘못 부를 위험(예: 완료 작업에 `unlinkImages`)이 생긴다. 비공개로 두고 다른 방식으로 주입하는 편이 나은가?
+3. **시작 순서에서 `failInterrupted` 안의 회수**: 시작 때 중단 작업마다 `collectImageIfUnused`가 파일을 지운다. 이어지는 `sweepFiles`·`sweepOrphans`와 겹쳐도 문제가 없다고 보았다(이미 지운 것은 건너뜀). 놓친 상호작용이 있는가?
+4. **종료 중 실패**: `runJob`은 `closed`면 `fail()`을 부르지 않는다 → 다음 시작의 `failInterrupted`가 처리한다. 이 경로에서 회수가 빠지는 경우가 있는가?
+5. **테스트의 인위적 상황**: "진행 중인 다른 작업이 같은 이미지를 참조"는 실제 흐름으로 만들 수 없어(프로젝트당 진행 중 작업 하나, 이미지는 프로젝트 소속) 대기 중인 다른 프로젝트 작업에 연결을 직접 넣었다. 이 테스트가 의미가 있는가, 아니면 빼는 편이 정직한가?
+6. **충돌 복구 테스트의 흉내 방식**: (a)는 `releaseImagesOf`를 no-op으로, (b)는 `collectImageIfUnused`를 `false` 반환으로 바꿔 "그 지점에서 멈춘 상태"를 만든다. 실제 프로세스 중단과 다른 점이 있는가?
+7. **실측 판정의 독립성**: 기대 id = "완성 작업을 요청할 때의 장면 이미지 ∪ 현재 장면 이미지"를 스크립트가 기억한다. 현재 장면 id는 `store.getProject`(DB)에서 읽는다. 이 정도면 계획 §5.3의 "따로 계산"을 만족하는가? `--report-only` 플래그를 남겨 두는 것이 괜찮은가?
+8. **문서의 한계 표현**: `docs/disk-usage.md` 한계 절에 "측정은 이미지 읽기 실패로, 테스트는 이미지 읽기 실패와 서버 중단으로만 확인"이라고 적었다. 과장이나 누락이 있는가?
+
+## 5. 검토 방법
+```
+git diff 337a2a5 9c6f60b -- server shared            # 제품 코드(작다)
+git show 99d2342 -- tests/reclaimFailedImages.test.ts
+git diff 337a2a5 9c6f60b -- scripts/measure-disk.ts
+npx vitest run tests/reclaimFailedImages.test.ts
+npm run measure:disk -- --only P3                     # 약 1분
+```
+변이를 직접 해 보려면 `releaseImagesOf` 안의 `unlinkImages` 호출 삭제, 또는 `complete()`에 `this.releaseImagesOf(jobId)` 추가 → 테스트가 실패해야 한다.
