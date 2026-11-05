@@ -101,3 +101,8 @@ npx vitest run tests/reclaimFailedImages.test.ts
 npm run measure:disk -- --only P3                     # 약 1분
 ```
 변이를 직접 해 보려면 `releaseImagesOf` 안의 `unlinkImages` 호출 삭제, 또는 `complete()`에 `this.releaseImagesOf(jobId)` 추가 → 테스트가 실패해야 한다.
+
+## 6. 2차 검수 결과와 반영 (`9c6f60b` 통과)
+- 판정: 새 결함·병합 차단 사유 없음. 상태 커밋 → 회수 순서, 동기 실행으로 끼어들기 없음, 단계별 실패 시 실패 기록·큐 유지, 시작 순서의 안전성·멱등, 참조 보호, 종료 중 실패의 다음 시작 처리, 상태 기준 `imageUrl: null`을 확인.
+- 선택 권고 반영: `linkedImageIds`·`unlinkImages`를 다시 `private`으로 두고, 테스트는 `a.renders as any`로 주입한다(생산 코드 오용 가능성 축소). 단위·API 183개, 타입 검사 통과 — 주입이 듣지 않으면 "연결이 남는다" 단언이 실패하므로 주입이 여전히 동작함도 확인된다.
+- 유지: 다른 프로젝트 대기 작업에 연결을 직접 넣는 테스트(DB 수준 불변식 검증), 중단 지점 모의 테스트(두 영속 상태 경계), 실측의 기대 id 계산과 `--report-only`, 문서의 한계 표현.
