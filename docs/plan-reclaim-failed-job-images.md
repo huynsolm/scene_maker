@@ -25,9 +25,11 @@
 ## 4. 설계
 
 ### 4.1 실패할 때 (`RenderStore.fail` → `finish`)
-1. `finish(jobId, 'failed', …)`의 **같은 트랜잭션** 안에서, 상태를 `failed`로 바꾼 직후 그 작업의 연결 이미지 id를 읽고 `DELETE FROM render_job_images WHERE job_id = ?`를 실행한다. 완료(`done`)일 때는 하지 않는다(완성 영상은 이미지를 계속 참조한다 — 영상 삭제 때 회수).
-2. 커밋 뒤, 읽어 둔 이미지마다 `collectImageIfUnused(id)`를 호출한다. 영상 삭제(`deleteVideo`)와 같은 방식으로 **항목별 예외를 로그만 남기고 계속**한다. 실패 처리(상태 `failed` 기록) 자체는 이미 커밋됐으므로 뒤집히지 않고, 예외가 렌더 큐 밖으로 새지 않는다.
-3. 다른 장면·완성 작업·진행 중 작업이 같은 이미지를 참조하면 `collectImageIfUnused`가 남긴다(기존 규칙 그대로).
+1. `finish(jobId, 'failed', …)`가 지금처럼 상태를 `failed`로 바꾸고 프로젝트 상태를 갱신하는 트랜잭션을 **먼저 커밋**한다. 이 부분은 바꾸지 않는다.
+2. 커밋 뒤(실패일 때만), 그 작업의 연결 이미지 id를 읽고 `DELETE FROM render_job_images WHERE job_id = ?`를 실행한 다음, 읽어 둔 이미지마다 `collectImageIfUnused(id)`를 호출한다. 완료(`done`)일 때는 하지 않는다(완성 영상은 이미지를 계속 참조한다 — 영상 삭제 때 회수).
+3. 2의 전체를 **최선만 다한다**: 연결 삭제나 이미지 회수에서 예외가 나면 로그만 남기고 계속한다(이미지별로도 따로). 실패 기록은 이미 커밋됐으므로 뒤집히지 않고, 예외가 렌더 큐 밖으로 새지 않는다. 연결이 남더라도 해가 없고(이미지가 남을 뿐) 다음 서버 시작의 4.2가 정리한다.
+4. 다른 장면·완성 작업·진행 중 작업이 같은 이미지를 참조하면 `collectImageIfUnused`가 남긴다(기존 규칙 그대로).
+- 자체 검토 반영: 처음에는 연결 삭제를 상태 변경과 **같은 트랜잭션**에 두었으나, 그러면 연결 삭제가 실패할 때 실패 기록까지 롤백되어 작업이 '생성 중'으로 갇힌다. 상태 기록이 회수보다 중요하므로 순서를 나눴다.
 
 ### 4.2 서버 시작 시 (기존 실패 기록)
 - `RenderStore.releaseFailedImages()`를 새로 둔다: `DELETE FROM render_job_images WHERE job_id IN (SELECT id FROM render_jobs WHERE status = 'failed')`. 몇 개를 정리했는지 돌려준다.
