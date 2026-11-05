@@ -251,7 +251,7 @@ describe('회수 단계별 실패 주입 — 상태는 실패로 남고 큐는 �
     const a = await setup();
     const p = createSampleProject(a.store);
     const warn = silenceWarn();
-    vi.spyOn(a.renders, 'linkedImageIds').mockImplementation(() => {
+    vi.spyOn(a.renders as any, 'linkedImageIds').mockImplementation(() => {
       throw new Error('select boom');
     });
     const { id, old } = await failAfterReplacing(a, p.id, [0]);
@@ -271,7 +271,7 @@ describe('회수 단계별 실패 주입 — 상태는 실패로 남고 큐는 �
     const a = await setup();
     const p = createSampleProject(a.store);
     const warn = silenceWarn();
-    vi.spyOn(a.renders, 'unlinkImages').mockImplementation(() => {
+    vi.spyOn(a.renders as any, 'unlinkImages').mockImplementation(() => {
       throw new Error('delete boom');
     });
     const { id, old } = await failAfterReplacing(a, p.id, [0]);

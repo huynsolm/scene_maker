@@ -336,14 +336,14 @@ export class RenderStore {
   }
 
   /** 작업에 연결된 이미지 id. */
-  linkedImageIds(jobId: string): string[] {
+  private linkedImageIds(jobId: string): string[] {
     return (this.db.prepare(`SELECT image_id FROM render_job_images WHERE job_id = ?`).all(jobId) as Array<{ image_id: string }>).map(
       (r) => r.image_id,
     );
   }
 
   /** 작업의 이미지 연결을 모두 끊는다. 작업 기록 자체는 남는다. */
-  unlinkImages(jobId: string): number {
+  private unlinkImages(jobId: string): number {
     return this.db.prepare(`DELETE FROM render_job_images WHERE job_id = ?`).run(jobId).changes;
   }
 
