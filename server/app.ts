@@ -42,6 +42,12 @@ export async function buildApp(config: AppConfig, deps: { renderer?: Renderer } 
   // 시작 시 복구: 진행 중이던 작업은 실패로 표시(사용자가 직접 재시도), 임시/고아 파일 정리.
   // 입력 내용과 장면이 쓰는 이미지는 건드리지 않는다.
   renders.failInterrupted();
+  // 실패 작업이 붙잡은 이미지 연결 정리. 실패해도 이미지가 남을 뿐이므로 시작은 계속하고 다음 시작 때 다시 시도한다.
+  try {
+    renders.releaseFailedImages();
+  } catch (e) {
+    console.warn(`[실패 작업 이미지 연결 정리 실패] (${(e as Error)?.message ?? e}) — 다음 서버 시작 때 다시 시도한다`);
+  }
   renders.sweepFiles();
   store.sweepOrphans();
 
